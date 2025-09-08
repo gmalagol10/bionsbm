@@ -889,7 +889,7 @@ class sbmtm():
         plt.colorbar()
         fig.savefig("p_tw_d_%d.png" % l)
 
-    def save_data(self):
+    def save_data_sbmtm(self):
         for i in range(len(self.state.get_levels()) - 2)[::-1]:
             print("Saving level %d" % i)
             self.print_topics(l=i)

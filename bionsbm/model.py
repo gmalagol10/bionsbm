@@ -648,7 +648,7 @@ def save_single_level(self, l, name):
 			p_tk_d.to_csv(f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz", compression="gzip", sep="\t")
 
 
-def save_data(self, name="MyBionSBM/mymodel"):
+def save_data_new(self, name="MyBionSBM/mymodel"):
 
 	#Save global files
 	folder="/".join(name.split("/")[:-1])
@@ -662,6 +662,7 @@ def save_data(self, name="MyBionSBM/mymodel"):
 		pickle.dump(self.state, f)
 
 	# Parallelise levels
+	L = np.min([len(model.state.levels), 6])
 	with ThreadPoolExecutor() as executor:
 		futures = [executor.submit(self.save_single_level, l, name) for l in range(L)]
 		for f in futures:
