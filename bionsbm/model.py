@@ -614,57 +614,57 @@ class bionsbm(sbmtm.sbmtm):
 			vertex_color=colmap,
 			vertex_fill_color=colmap, *args, **kwargs)
 
-def save_single_level(self, l, name):
+	def save_single_level(self, l, name):
 
-	main_feature=self.modalities[0]
-	data=self.get_groups(l)
-	# P(main_feature | main_topic)
-	p_w_tw = pd.DataFrame(
-		data=data["p_w_tw"],
-		index=self.words,
-		columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-	p_w_tw.to_csv(f"{name}_level_{l}_{main_feature}_topics.tsv.gz", compression="gzip", sep="\t")
-
-	# P(meta_feature | meta_topic_feature) for each type of meta_feature
-	if len(self.modalities) > 1:
-		for k, meta_features in enumerate(self.modalities[1:]):
-			feat_topic = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
-				columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-			feat_topic.to_csv(f"{name}_level_{l}_{meta_features}_topics.tsv.gz", compression="gzip", sep="\t")
-
-		# P(document | cluster)
-		pd.DataFrame(data=data["p_td_d"], columns=self.documents).to_csv(
-			f"{name}_level_{l}_clusters.csv.gz", compression="gzip")
-
-		# P(main_topic | documents)
-		p_tw_d = pd.DataFrame(data=data["p_tw_d"].T, index=self.documents,
+		main_feature=self.modalities[0]
+		data=self.get_groups(l)
+		# P(main_feature | main_topic)
+		p_w_tw = pd.DataFrame(
+			data=data["p_w_tw"],
+			index=self.words,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-		p_tw_d.to_csv(f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz", compression="gzip", sep="\t")
+		p_w_tw.to_csv(f"{name}_level_{l}_{main_feature}_topics.tsv.gz", compression="gzip", sep="\t")
 
-		# P(meta_topic | document) for each kind of meta_feature
-		for k, meta_features in enumerate(self.modalities[1:]):
-			p_tk_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
-				columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-			p_tk_d.to_csv(f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz", compression="gzip", sep="\t")
+		# P(meta_feature | meta_topic_feature) for each type of meta_feature
+		if len(self.modalities) > 1:
+			for k, meta_features in enumerate(self.modalities[1:]):
+				feat_topic = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
+					columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+				feat_topic.to_csv(f"{name}_level_{l}_{meta_features}_topics.tsv.gz", compression="gzip", sep="\t")
+
+			# P(document | cluster)
+			pd.DataFrame(data=data["p_td_d"], columns=self.documents).to_csv(
+				f"{name}_level_{l}_clusters.csv.gz", compression="gzip")
+
+			# P(main_topic | documents)
+			p_tw_d = pd.DataFrame(data=data["p_tw_d"].T, index=self.documents,
+				columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
+			p_tw_d.to_csv(f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz", compression="gzip", sep="\t")
+
+			# P(meta_topic | document) for each kind of meta_feature
+			for k, meta_features in enumerate(self.modalities[1:]):
+				p_tk_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
+					columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+				p_tk_d.to_csv(f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz", compression="gzip", sep="\t")
 
 
-def save_data_new(self, name="MyBionSBM/mymodel"):
+	def save_data_new(self, name="MyBionSBM/mymodel"):
 
-	#Save global files
-	folder="/".join(name.split("/")[:-1])
-	Path(folder).mkdir(parents=True, exist_ok=True)
+		#Save global files
+		folder="/".join(name.split("/")[:-1])
+		Path(folder).mkdir(parents=True, exist_ok=True)
 
-	self.save_graph(filename=f"{name}_graph.xml.gz")
-	self.dump_model(filename=f"{name}_model.pkl")
-	with open(f"{name}_entropy.txt", "w") as f:
-		f.write(str(self.state.entropy()))
-	with open(f"{name}_state.pkl", "wb") as f:
-		pickle.dump(self.state, f)
+		self.save_graph(filename=f"{name}_graph.xml.gz")
+		self.dump_model(filename=f"{name}_model.pkl")
+		with open(f"{name}_entropy.txt", "w") as f:
+			f.write(str(self.state.entropy()))
+		with open(f"{name}_state.pkl", "wb") as f:
+			pickle.dump(self.state, f)
 
-	# Parallelise levels
-	L = np.min([len(model.state.levels), 6])
-	with ThreadPoolExecutor() as executor:
-		futures = [executor.submit(self.save_single_level, l, name) for l in range(L)]
-		for f in futures:
-			f.result()  # wait for all to finish
+		# Parallelise levels
+		L = np.min([len(model.state.levels), 6])
+		with ThreadPoolExecutor() as executor:
+			futures = [executor.submit(self.save_single_level, l, name) for l in range(L)]
+			for f in futures:
+				f.result()  # wait for all to finish
 
