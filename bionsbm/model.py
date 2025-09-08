@@ -102,7 +102,7 @@ class bionsbm(sbmtm.sbmtm):
 										for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
 
 
-	def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: list)->None:
+	def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: list, fast=True)->None:
 		"""
 		Create a graph from two dataframes one with words, others with keywords or other layers of information
 
@@ -121,9 +121,12 @@ class bionsbm(sbmtm.sbmtm):
 
 		self.nbranches = len(df_keyword_list)
 	   
-		self.make_graph(df_all.drop("kind", axis=1), get_kind)
-		self.make_graph_fast(df_all.drop("kind", axis=1), get_kind)
-		
+		if fast:
+			self.make_graph_fast(df_all.drop("kind", axis=1), get_kind)
+		else:
+			self.make_graph(df_all.drop("kind", axis=1), get_kind)
+
+
 	def make_graph(self, df: pd.DataFrame, get_kind)->None:
 		"""
 		Create a graph from a pandas DataFrame
@@ -131,18 +134,18 @@ class bionsbm(sbmtm.sbmtm):
 		:param df: DataFrame with words on index and texts on columns. Actually this is a BoW.
 		:param get_kind: function that returns 1 or 2 given an element of df.index. [1 for words 2 for keywords]
 		"""
-		self.g_old = gt.Graph(directed=False)
-		name = self.g_old.vp["name"] = self.g_old.new_vp("string")
-		kind = self.g_old.vp["kind"] = self.g_old.new_vp("int")
-		weight = self.g_old.ep["count"] = self.g_old.new_ep("int")
+		self.g = gt.Graph(directed=False)
+		name = self.g.vp["name"] = self.g.new_vp("string")
+		kind = self.g.vp["kind"] = self.g.new_vp("int")
+		weight = self.g.ep["count"] = self.g.new_ep("int")
 		
 		for doc in df.columns:
-			d = self.g_old.add_vertex()
+			d = self.g.add_vertex()
 			name[d] = doc
 			kind[d] = 0
 			
 		for word in df.index:
-			w = self.g_old.add_vertex()
+			w = self.g.add_vertex()
 			name[w] = word
 			kind[w] = get_kind(word)
 
@@ -150,20 +153,20 @@ class bionsbm(sbmtm.sbmtm):
 		
 		for i_doc, doc in enumerate(df.columns):
 			text = df[doc]
-			self.g_old.add_edge_list([(i_doc,D + x[0][0],x[1]) for x in zip(enumerate(df.index),text)], eprops=[weight])
+			self.g.add_edge_list([(i_doc,D + x[0][0],x[1]) for x in zip(enumerate(df.index),text)], eprops=[weight])
 
-		filter_edges = self.g_old.new_edge_property("bool")
-		for e in self.g_old.edges():
+		filter_edges = self.g.new_edge_property("bool")
+		for e in self.g.edges():
 			filter_edges[e] = weight[e]>0
 
-		self.g_old.set_edge_filter(filter_edges)
-		self.g_old.purge_edges()
-		self.g_old.clear_filters()
+		self.g.set_edge_filter(filter_edges)
+		self.g.purge_edges()
+		self.g.clear_filters()
 		
 		self.documents = df.columns
-		self.words = df.index[self.g_old.vp['kind'].a[D:] == 1]
+		self.words = df.index[self.g.vp['kind'].a[D:] == 1]
 		for ik in range(2,2+self.nbranches):# 2 is doc and words
-			self.keywords.append(df.index[self.g_old.vp['kind'].a[D:] == ik])
+			self.keywords.append(df.index[self.g.vp['kind'].a[D:] == ik])
 		
 
 	def make_graph_fast(self, df: pd.DataFrame, get_kind):
