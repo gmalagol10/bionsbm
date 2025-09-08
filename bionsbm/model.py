@@ -648,7 +648,7 @@ def save_single_level(self, l, name):
 			p_tk_d.to_csv(f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz", compression="gzip", sep="\t")
 
 
-def save_data(self, name="MyBionSBM/mymodel")
+def save_data(self, name="MyBionSBM/mymodel"):
 
 	#Save global files
 	folder="/".join(name.split("/")[:-1])
