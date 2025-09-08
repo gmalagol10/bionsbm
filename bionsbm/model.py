@@ -18,6 +18,8 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see < http: // www.gnu.org/licenses/>.
 """
 
+import warnings
+warnings.filterwarnings("ignore")
 import graph_tool.all as gt
 import numpy as np
 import pandas as pd
@@ -119,7 +121,8 @@ class bionsbm(sbmtm.sbmtm):
 
 		self.nbranches = len(df_keyword_list)
 	   
-		return self.make_graph(df_all.drop("kind", axis=1), get_kind)
+		self.make_graph(df_all.drop("kind", axis=1), get_kind)
+		self.make_graph_fast(df_all.drop("kind", axis=1), get_kind)
 		
 	def make_graph(self, df: pd.DataFrame, get_kind)->None:
 		"""
@@ -128,18 +131,18 @@ class bionsbm(sbmtm.sbmtm):
 		:param df: DataFrame with words on index and texts on columns. Actually this is a BoW.
 		:param get_kind: function that returns 1 or 2 given an element of df.index. [1 for words 2 for keywords]
 		"""
-		self.g = gt.Graph(directed=False)
-		name = self.g.vp["name"] = self.g.new_vp("string")
-		kind = self.g.vp["kind"] = self.g.new_vp("int")
-		weight = self.g.ep["count"] = self.g.new_ep("int")
+		self.g_old = gt.Graph(directed=False)
+		name = self.g_old.vp["name"] = self.g_old.new_vp("string")
+		kind = self.g_old.vp["kind"] = self.g_old.new_vp("int")
+		weight = self.g_old.ep["count"] = self.g_old.new_ep("int")
 		
 		for doc in df.columns:
-			d = self.g.add_vertex()
+			d = self.g_old.add_vertex()
 			name[d] = doc
 			kind[d] = 0
 			
 		for word in df.index:
-			w = self.g.add_vertex()
+			w = self.g_old.add_vertex()
 			name[w] = word
 			kind[w] = get_kind(word)
 
@@ -147,21 +150,86 @@ class bionsbm(sbmtm.sbmtm):
 		
 		for i_doc, doc in enumerate(df.columns):
 			text = df[doc]
-			self.g.add_edge_list([(i_doc,D + x[0][0],x[1]) for x in zip(enumerate(df.index),text)], eprops=[weight])
+			self.g_old.add_edge_list([(i_doc,D + x[0][0],x[1]) for x in zip(enumerate(df.index),text)], eprops=[weight])
 
-		filter_edges = self.g.new_edge_property("bool")
-		for e in self.g.edges():
+		filter_edges = self.g_old.new_edge_property("bool")
+		for e in self.g_old.edges():
 			filter_edges[e] = weight[e]>0
 
+		self.g_old.set_edge_filter(filter_edges)
+		self.g_old.purge_edges()
+		self.g_old.clear_filters()
+		
+		self.documents = df.columns
+		self.words = df.index[self.g_old.vp['kind'].a[D:] == 1]
+		for ik in range(2,2+self.nbranches):# 2 is doc and words
+			self.keywords.append(df.index[self.g_old.vp['kind'].a[D:] == ik])
+		
+
+	def make_graph_fast(self, df: pd.DataFrame, get_kind) -> None:
+		"""
+		Create a bipartite graph (documents <-> words/keywords) from a pandas DataFrame.
+		Optimized with vectorized operations and sparse support.
+
+		Parameters
+		----------
+		df : pd.DataFrame
+			Bag-of-Words matrix with words as index and documents as columns.
+		get_kind : callable
+			Function mapping each word (index element) to an integer category.
+		"""
+		self.g = gt.Graph(directed=False)
+
+		n_docs, n_words = df.shape[1], df.shape[0]
+		self.g.add_vertex(n_docs + n_words)
+
+		# --- vertex properties ---
+		name = self.g.new_vp("string")
+		kind = self.g.new_vp("int")
+		self.g.vp["name"] = name
+		self.g.vp["kind"] = kind
+
+		# Assign doc names/kinds
+		for i, doc in enumerate(df.columns):
+			name[self.g.vertex(i)] = str(doc)
+			kind[self.g.vertex(i)] = 0
+
+		# Assign word names/kinds
+		for j, word in enumerate(df.index, start=n_docs):
+			name[self.g.vertex(j)] = str(word)
+			kind[self.g.vertex(j)] = int(get_kind(word))
+
+		# --- edge property ---
+		weight = self.g.new_ep("int")
+		self.g.ep["count"] = weight
+
+		# --- build edges using sparse COO ---
+		mat = sparse.coo_matrix(df.values)
+		edge_array = np.column_stack([
+			mat.col,		   # doc index
+			mat.row + n_docs,  # word index
+			mat.data		   # weights
+		])
+
+		# Add edges in one bulk operation
+		self.g.add_edge_list(edge_array, eprops=[weight])
+
+		# --- filter zero-weight edges (vectorized) ---
+		filter_edges = self.g.new_edge_property("bool")
+		filter_edges.a = weight.a > 0
 		self.g.set_edge_filter(filter_edges)
 		self.g.purge_edges()
 		self.g.clear_filters()
-		
+
+		# --- store attributes ---
 		self.documents = df.columns
-		self.words = df.index[self.g.vp['kind'].a[D:] == 1]
-		for ik in range(2,2+self.nbranches):# 2 is doc and words
-			self.keywords.append(df.index[self.g.vp['kind'].a[D:] == ik])
-		
+		self.words = df.index[[get_kind(w) == 1 for w in df.index]]
+		self.keywords = []
+		for ik in range(2, 2 + self.nbranches):
+			self.keywords.append(df.index[[get_kind(w) == ik for w in df.index]])
+
+
+
 	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=3, B_max=None, clabel=None, *args, **kwargs) -> None:
 		"""
 		Fit using minimize_nested_blockmodel_dl
@@ -404,182 +472,7 @@ class bionsbm(sbmtm.sbmtm):
 		for tk, p_tk in enumerate(p_tk_d[:, doc_index]):
 			list_topics_tk += [(tk, p_tk)]
 		return list_topics_tk
-	
-	def print_topics(self, l=0, format='csv', path_save=''):
-		'''
-		Print topics, topic-distributions, and document clusters for a given level in the hierarchy.
-		
-		:param l: level to store
-		:param format: csv (default) or html
-		:param path_save: path/to/store/file
-		'''
-		D, W, K = self._get_shape()
 
-		## topics
-		dict_topics = self.topics(l=l, n=-1)
-
-		list_topics = sorted(list(dict_topics.keys()))
-		list_columns = ['Topic %s' % (t + 1) for t in list_topics]
-
-		T = len(list_topics)
-		df = pd.DataFrame(columns=list_columns, index=range(W))
-
-		for t in list_topics:
-			list_w = [h[0] for h in dict_topics[t]]
-			V_t = len(list_w)
-			df.iloc[:V_t, t] = list_w
-		df = df.dropna(how='all', axis=0)
-		if format == 'csv':
-			fname_save = 'bionsbm_level_%s_topics.csv' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_csv(filename, index=False, na_rep='')
-		elif format == 'html':
-			fname_save = 'bionsbm_level_%s_topics.html' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_html(filename, index=False, na_rep='')
-		elif format == 'tsv':
-			fname_save = 'bionsbm_level_%s_topics.tsv' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_csv(filename, index=False, na_rep='', sep='\t')
-		else:
-			pass
-
-		## topic distributions
-		list_columns = ['i_doc', 'doc'] + ['Topic %s' % (t + 1) for t in list_topics]
-		df = pd.DataFrame(columns=list_columns, index=range(D))
-		for i_doc in range(D):
-			list_topicdist = self.topicdist(i_doc, l=l)
-			df.iloc[i_doc, 0] = i_doc
-			df.iloc[i_doc, 1] = self.documents[i_doc]
-			df.iloc[i_doc, 2:] = [h[1] for h in list_topicdist]
-		df = df.dropna(how='all', axis=1)
-		if format == 'csv':
-			fname_save = 'bionsbm_level_%s_topic-dist.csv' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_csv(filename, index=False, na_rep='')
-		elif format == 'html':
-			fname_save = 'bionsbm_level_%s_topic-dist.html' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_html(filename, index=False, na_rep='')
-		else:
-			pass
-		
-		## keywords
-		for ik in range(2,2+self.nbranches):
-			dict_metadata = self.metadata(l=l, n=-1, kind=ik)
-
-			list_metadata = sorted(list(dict_metadata.keys()))
-			list_columns = ['Metadatum %s' % (t + 1) for t in list_metadata]
-
-			T = len(list_topics)
-			df = pd.DataFrame(columns=list_columns, index=range(K[ik-2]))
-
-			for t in list_metadata:
-				list_w = [h[0] for h in dict_metadata[t]]
-				V_t = len(list_w)
-				df.iloc[:V_t, t] = list_w
-			df = df.dropna(how='all', axis=0)
-			if format == 'csv':
-				fname_save = 'bionsbm_level_%s_kind_%s_metadata.csv' % (l,ik)
-				filename = os.path.join(path_save, fname_save)
-				df.to_csv(filename, index=False, na_rep='')
-			elif format == 'html':
-				fname_save = 'bionsbm_level_%s_kind_%s_metadata.html' % (l,ik)
-				filename = os.path.join(path_save, fname_save)
-				df.to_html(filename, index=False, na_rep='')
-			elif format == 'tsv':
-				fname_save = 'bionsbm_level_%s_kind_%s_metadata.tsv' % (l,ik)
-				filename = os.path.join(path_save, fname_save)
-				df.to_csv(filename, index=False, na_rep='', sep='\t')
-			else:
-				pass
-
-			## metadata distributions
-			list_columns = ['i_doc', 'doc'] + ['Metadatum %s' % (t + 1) for t in list_metadata]
-			df = pd.DataFrame(columns=list_columns, index=range(D))
-			for i_doc in range(D):
-				list_topicdist = self.metadatumdist(i_doc, l=l, kind=ik)
-				df.iloc[i_doc, 0] = i_doc
-				df.iloc[i_doc, 1] = self.documents[i_doc]
-				df.iloc[i_doc, 2:] = [h[1] for h in list_topicdist]
-			df = df.dropna(how='all', axis=1)
-			if format == 'csv':
-				fname_save = 'bionsbm_level_%s_kind_%s_metadatum-dist.csv' % (l,ik)
-				filename = os.path.join(path_save, fname_save)
-				df.to_csv(filename, index=False, na_rep='')
-			elif format == 'html':
-				fname_save = 'bionsbm_level_%s_kind_%s_metadatum-dist.html' % (
-					l,ik)
-				filename = os.path.join(path_save, fname_save)
-				df.to_html(filename, index=False, na_rep='')
-			else:
-				pass
-
-		## doc-groups
-
-		dict_clusters = self.clusters(l=l, n=-1)
-
-		list_clusters = sorted(list(dict_clusters.keys()))
-		list_columns = ['Cluster %s' % (t + 1) for t in list_clusters]
-
-		T = len(list_clusters)
-		df = pd.DataFrame(columns=list_columns, index=range(D))
-
-		for t in list_clusters:
-			list_d = [h[0] for h in dict_clusters[t]]
-			D_t = len(list_d)
-			df.iloc[:D_t, t] = list_d
-		df = df.dropna(how='all', axis=0)
-		if format == 'csv':
-			fname_save = 'bionsbm_level_%s_clusters.csv' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_csv(filename, index=False, na_rep='')
-		elif format == 'html':
-			fname_save = 'bionsbm_level_%s_clusters.html' % (l)
-			filename = os.path.join(path_save, fname_save)
-			df.to_html(filename, index=False, na_rep='')
-		else:
-			pass
-
-		## word-distr
-		list_topics = np.arange(len(self.get_groups(l)['p_w_tw'].T))
-		list_columns = ["Topic %d" % (t + 1) for t in list_topics]
-
-		pwtw_df = pd.DataFrame(data=self.get_groups(l)['p_w_tw'], index=self.words, columns=list_columns)
-		pwtw_df.replace(0, np.nan)
-		pwtw_df = pwtw_df.dropna(how='all', axis=0)
-		pwtw_df.replace(np.nan, 0)
-		if format == 'csv':
-			fname_save = "bionsbm_level_%d_word-dist.csv" % l
-			filename = os.path.join(path_save, fname_save)
-			pwtw_df.to_csv(filename, index=True, header=True, na_rep='')
-		elif format == 'html':
-			fname_save = "bionsbm_level_%d_word-dist.html" % l
-			filename = os.path.join(path_save, fname_save)
-			pwtw_df.to_html(filename, index=True, na_rep='')
-		else:
-			pass
-		
-		
-		## keyword-distr
-		for ik in range(2, 2+self.nbranches):
-			list_topics = np.arange(len(self.get_groups(l)['p_w_key_tk'][ik-2].T))
-			list_columns = ["Metadatum %d" % (t + 1) for t in list_topics]
-
-			pw_key_tk_df = pd.DataFrame(data=self.get_groups(l)['p_w_key_tk'][ik-2], index=self.keywords[ik-2], columns=list_columns)
-			pw_key_tk_df.replace(0, np.nan)
-			pw_key_tk_df = pw_key_tk_df.dropna(how='all', axis=0)
-			pw_key_tk_df.replace(np.nan, 0)
-			if format == 'csv':
-				fname_save = "bionsbm_level_%d_kind_%s_keyword-dist.csv" % (l,ik)
-				filename = os.path.join(path_save, fname_save)
-				pw_key_tk_df.to_csv(filename, index=True, header=True, na_rep='')
-			elif format == 'html':
-				fname_save = "bionsbm_level_%d_kind_%s_keyword-dist.html" % (l,ik)
-				filename = os.path.join(path_save, fname_save)
-				pw_key_tk_df.to_html(filename, index=True, na_rep='')
-			else:
-				pass
 
 	def draw(self, *args, **kwargs) -> None:
 		"""
