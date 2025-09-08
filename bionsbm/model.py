@@ -262,8 +262,8 @@ class bionsbm(sbmtm.sbmtm):
 		self.mdl = min_entropy
 
 		L = len(self.state.levels)
-		dict_groups_L = {}
-		self.groups = dict_groups_L
+		model.L = L
+		self.groups = {}
 		"""	  
 		## only trivial bipartite structure
 		if L == 2:
