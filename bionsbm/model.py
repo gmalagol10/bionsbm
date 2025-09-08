@@ -662,7 +662,7 @@ class bionsbm(sbmtm.sbmtm):
 			pickle.dump(self.state, f)
 
 		# Parallelise levels
-		L = np.min([len(model.state.levels), 6])
+		L = np.min([len(self.state.levels), 6])
 		with ThreadPoolExecutor() as executor:
 			futures = [executor.submit(self.save_single_level, l, name) for l in range(L)]
 			for f in futures:
