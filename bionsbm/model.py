@@ -27,7 +27,7 @@ import muon as mu
 import scanpy as sc
 import functools
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 """
@@ -614,56 +614,144 @@ class bionsbm(sbmtm.sbmtm):
 			vertex_color=colmap,
 			vertex_fill_color=colmap, *args, **kwargs)
 
-	def save_single_level(self, l, name):
 
-		main_feature=self.modalities[0]
-		data=self.get_groups(l)
-		# P(main_feature | main_topic)
-		p_w_tw = pd.DataFrame(
-			data=data["p_w_tw"],
-			index=self.words,
+	def save_single_level(self, l: int, name: str) -> None:
+		"""
+		Save per-level probability matrices (topics, clusters, documents) for the given level.
+
+		Parameters
+		----------
+		l : int
+			The level index to save. Must be within the range of available model levels.
+		name : str
+			Base path (folder + prefix) where files will be written.
+			Example: "results/mymodel" → files like:
+				- results/mymodel_level_0_mainfeature_topics.tsv.gz
+				- results/mymodel_level_0_clusters.tsv.gz
+				- results/mymodel_level_0_mainfeature_topics_documents.tsv.gz
+				- results/mymodel_level_0_metafeature_topics.tsv.gz
+				- results/mymodel_level_0_metafeature_topics_documents.tsv.gz
+
+		Notes
+		-----
+		- Files are written as tab-separated values (`.tsv.gz`) with gzip compression.
+		- Handles both the main feature (`self.modalities[0]`) and any meta-features (`self.modalities[1:]`).
+		- Raises RuntimeError if any file cannot be written.
+		"""
+
+		# --- Validate inputs ---
+		if not isinstance(l, int) or l < 0 or l >= len(self.state.levels):
+			raise ValueError(f"Invalid level index {l}. Must be between 0 and {len(self.state.levels) - 1}.")
+		if not isinstance(name, str) or not name.strip():
+			raise ValueError("`name` must be a non-empty string path prefix.")
+
+		main_feature = self.modalities[0]
+
+		try:
+			data = self.get_groups(l)
+		except Exception as e:
+			raise RuntimeError(f"Failed to get group data for level {l}: {e}") from e
+
+		# Helper to safely save a DataFrame
+		def _safe_save(df, filepath):
+			try:
+				Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+				df.to_csv(filepath, compression="gzip", sep="\t")
+			except Exception as e:
+				raise RuntimeError(f"Failed to save {filepath}: {e}") from e
+
+		# --- P(main_feature | main_topic) ---
+		p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-		p_w_tw.to_csv(f"{name}_level_{l}_{main_feature}_topics.tsv.gz", compression="gzip", sep="\t")
+		_safe_save(p_w_tw, f"{name}_level_{l}_{main_feature}_topics.tsv.gz")
 
-		# P(meta_feature | meta_topic_feature) for each type of meta_feature
+		# --- P(meta_feature | meta_topic_feature), if any ---
 		if len(self.modalities) > 1:
 			for k, meta_features in enumerate(self.modalities[1:]):
 				feat_topic = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
 					columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				feat_topic.to_csv(f"{name}_level_{l}_{meta_features}_topics.tsv.gz", compression="gzip", sep="\t")
+				_safe_save(feat_topic, f"{name}_level_{l}_{meta_features}_topics.tsv.gz")
 
-			# P(document | cluster)
-			pd.DataFrame(data=data["p_td_d"], columns=self.documents).to_csv(f"{name}_level_{l}_clusters.tsv.gz", compression="gzip", sep="\t")
+			# --- P(document | cluster) ---
+			clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
+			_safe_save(clusters, f"{name}_level_{l}_clusters.tsv.gz")
 
-			# P(main_topic | documents)
-			p_tw_d = pd.DataFrame(data=data["p_tw_d"].T, index=self.documents,
+			# --- P(main_topic | documents) ---
+			p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
 				columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-			p_tw_d.to_csv(f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz", compression="gzip", sep="\t")
+			_safe_save(p_tw_d, f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz")
 
-			# P(meta_topic | document) for each kind of meta_feature
+			# --- P(meta_topic | document) ---
 			for k, meta_features in enumerate(self.modalities[1:]):
 				p_tk_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
 					columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				p_tk_d.to_csv(f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz", compression="gzip", sep="\t")
+				_safe_save(p_tk_d, f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz")
 
 
-	def save_data_new(self, name="MyBionSBM/mymodel"):
 
-		#Save global files
-		folder="/".join(name.split("/")[:-1])
-		Path(folder).mkdir(parents=True, exist_ok=True)
+	def save_data_new(self, name: str = "MyBionSBM/mymodel") -> None:
+		"""
+		Save the global graph, model, state, and level-specific data for the current nSBM model.
 
-		self.save_graph(filename=f"{name}_graph.xml.gz")
-		self.dump_model(filename=f"{name}_model.pkl")
-		with open(f"{name}_entropy.txt", "w") as f:
-			f.write(str(self.state.entropy()))
-		with open(f"{name}_state.pkl", "wb") as f:
-			pickle.dump(self.state, f)
+		Parameters
+		----------
+		name : str, optional
+			Base path (folder + prefix) where all outputs will be saved.
+			Example: "results/mymodel" will produce:
+				- results/mymodel_graph.xml.gz
+				- results/mymodel_model.pkl	
+				- results/mymodel_entropy.txt
+				- results/mymodel_state.pkl
+				- results/mymodel_level_X_*.csv.gz  (per level, up to 6 levels)
 
-		# Parallelise levels
-		L = np.min([len(self.state.levels), 6])
+		Notes
+		-----
+		- The parent folder is created automatically if it does not exist.
+		- Level saving is parallelized with threads for efficiency in I/O.
+		- By default, at most 6 levels are saved, or fewer if the model has <6 levels.
+		- Exceptions in parallel tasks are caught and reported without stopping other tasks.
+		"""
+
+		# --- Validate name ---
+		if not isinstance(name, str) or not name.strip():
+			raise ValueError("`name` must be a non-empty string representing the save path.")
+
+		# --- Ensure folder exists ---
+		folder = os.path.dirname(name)
+		if folder:
+			Path(folder).mkdir(parents=True, exist_ok=True)
+
+		# --- Save global files ---
+		try:
+			self.save_graph(filename=f"{name}_graph.xml.gz")
+			self.dump_model(filename=f"{name}_model.pkl")
+
+			with open(f"{name}_entropy.txt", "w") as f:
+				f.write(str(self.state.entropy()))
+
+			with open(f"{name}_state.pkl", "wb") as f:
+				pickle.dump(self.state, f)
+		except Exception as e:
+			raise RuntimeError(f"Failed to save global files for model '{name}': {e}") from e
+
+		# --- Save levels in parallel (threaded to avoid data duplication) ---
+		L = min(len(self.state.levels), 6)
+		if L == 0:
+			print("Nothing to save")
+			return  # nothing to save
+
+		errors = []
 		with ThreadPoolExecutor() as executor:
-			futures = [executor.submit(self.save_single_level, l, name) for l in range(L)]
-			for f in futures:
-				f.result()  # wait for all to finish
+			futures = {executor.submit(self.save_single_level, l, name): l for l in range(L)}
+			for future in as_completed(futures):
+				l = futures[future]
+				try:
+					future.result()
+				except Exception as e:
+					errors.append((l, str(e)))
+
+		if errors:
+			msg = "; ".join([f"Level {l}: {err}" for l, err in errors])
+			raise RuntimeError(f"Errors occurred while saving levels: {msg}")
+
 
