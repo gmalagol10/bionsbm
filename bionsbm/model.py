@@ -250,16 +250,9 @@ class bionsbm(sbmtm.sbmtm):
 
 		for _ in range(n_init):
 			print("Fit number:", _, flush=True)
-			state = gt.minimize_nested_blockmodel_dl(self.g,
-													state_args=state_args,
-													multilevel_mcmc_args={
-														"B_min": B_min,
-														"B_max": B_max,
-														"verbose": verbose,
-														"parallel" : parallel
-													},
-									*args, 
-									**kwargs)
+			state = gt.minimize_nested_blockmodel_dl(self.g, state_args=state_args,
+													multilevel_mcmc_args={"B_min": B_min, "B_max": B_max, "verbose": verbose,"parallel" : parallel}, 
+													*args, **kwargs)
 			
 			entropy = state.entropy()
 			if entropy < min_entropy:
@@ -571,7 +564,7 @@ class bionsbm(sbmtm.sbmtm):
 
 
 
-	def save_data(self, name: str = "MyBionSBM/mymodel") -> None:
+	def save_data(self, name: str = "results/mymodel") -> None:
 		"""
 		Save the global graph, model, state, and level-specific data for the current nSBM model.
 
@@ -584,7 +577,7 @@ class bionsbm(sbmtm.sbmtm):
 				- results/mymodel_model.pkl	
 				- results/mymodel_entropy.txt
 				- results/mymodel_state.pkl
-				- results/mymodel_level_X_*.csv.gz  (per level, up to 6 levels)
+				- results/mymodel_level_X_*.tsv.gz  (per level, up to 6 levels)
 
 		Notes
 		-----
