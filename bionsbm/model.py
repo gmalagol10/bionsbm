@@ -30,7 +30,7 @@ import scanpy as sc
 import functools
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from scipy import sparse
 
 """
 Inherit hSBM code from https://github.com/martingerlach/hSBM_Topicmodel
