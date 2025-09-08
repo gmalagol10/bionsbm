@@ -162,7 +162,7 @@ class bionsbm(sbmtm.sbmtm):
 		for ik in range(2,2+self.nbranches):# 2 is doc and words
 			self.keywords.append(df.index[self.g.vp['kind'].a[D:] == ik])
 		
-	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=True, B_min=3, B_max=None, clabel=None, *args, **kwargs) -> None:
+	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=3, B_max=None, clabel=None, *args, **kwargs) -> None:
 		"""
 		Fit using minimize_nested_blockmodel_dl
 		
@@ -633,8 +633,7 @@ class bionsbm(sbmtm.sbmtm):
 				feat_topic.to_csv(f"{name}_level_{l}_{meta_features}_topics.tsv.gz", compression="gzip", sep="\t")
 
 			# P(document | cluster)
-			pd.DataFrame(data=data["p_td_d"], columns=self.documents).to_csv(
-				f"{name}_level_{l}_clusters.csv.gz", compression="gzip")
+			pd.DataFrame(data=data["p_td_d"], columns=self.documents).to_csv(f"{name}_level_{l}_clusters.tsv.gz", compression="gzip", sep="\t")
 
 			# P(main_topic | documents)
 			p_tw_d = pd.DataFrame(data=data["p_tw_d"].T, index=self.documents,
