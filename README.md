@@ -1,5 +1,5 @@
 # bionsbm
-### Single-cell Explainable geometry Aware Graph Attention Learning pipeLine
+### Graph-based topic modelling for single-cell multi-omica data
 
 ## Installation
 
