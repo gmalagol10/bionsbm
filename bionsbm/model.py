@@ -166,67 +166,53 @@ class bionsbm(sbmtm.sbmtm):
 			self.keywords.append(df.index[self.g_old.vp['kind'].a[D:] == ik])
 		
 
-	def make_graph_fast(self, df: pd.DataFrame, get_kind) -> None:
-		"""
-		Create a bipartite graph (documents <-> words/keywords) from a pandas DataFrame.
-		Optimized with vectorized operations and sparse support.
-
-		Parameters
-		----------
-		df : pd.DataFrame
-			Bag-of-Words matrix with words as index and documents as columns.
-		get_kind : callable
-			Function mapping each word (index element) to an integer category.
-		"""
+	def make_graph_fast(self, df: pd.DataFrame, get_kind):
 		self.g = gt.Graph(directed=False)
 
 		n_docs, n_words = df.shape[1], df.shape[0]
+
+		# Add all vertices first
 		self.g.add_vertex(n_docs + n_words)
 
-		# --- vertex properties ---
+		# Create vertex properties
 		name = self.g.new_vp("string")
 		kind = self.g.new_vp("int")
 		self.g.vp["name"] = name
 		self.g.vp["kind"] = kind
 
-		# Assign doc names/kinds
+		# Assign doc vertices (loop for names, array for kind)
 		for i, doc in enumerate(df.columns):
-			name[self.g.vertex(i)] = str(doc)
-			kind[self.g.vertex(i)] = 0
+		    name[self.g.vertex(i)] = doc
+		kind.get_array()[:n_docs] = 0
 
-		# Assign word names/kinds
-		for j, word in enumerate(df.index, start=n_docs):
-			name[self.g.vertex(j)] = str(word)
-			kind[self.g.vertex(j)] = int(get_kind(word))
+		# Assign word vertices (loop for names, array for kind)
+		for j, word in enumerate(df.index):
+		    name[self.g.vertex(n_docs + j)] = word
+		kind.get_array()[n_docs:] = np.array([get_kind(w) for w in df.index], dtype=int)
 
-		# --- edge property ---
+		# Edge weights
 		weight = self.g.new_ep("int")
 		self.g.ep["count"] = weight
 
-		# --- build edges using sparse COO ---
-		mat = sparse.coo_matrix(df.values)
-		edge_array = np.column_stack([
-			mat.col,		   # doc index
-			mat.row + n_docs,  # word index
-			mat.data		   # weights
-		])
+		# Build sparse edges
+		rows, cols = df.values.nonzero()
+		vals = df.values[rows, cols]
+		edges = [(c, n_docs + r, v) for r, c, v in zip(rows, cols, vals)]
+		
+		self.g.add_edge_list(edges, eprops=[weight])
 
-		# Add edges in one bulk operation
-		self.g.add_edge_list(edge_array, eprops=[weight])
-
-		# --- filter zero-weight edges (vectorized) ---
+		# Remove edges with 0 weight
 		filter_edges = self.g.new_edge_property("bool")
-		filter_edges.a = weight.a > 0
+		for e in self.g.edges():
+		    filter_edges[e] = weight[e] > 0
 		self.g.set_edge_filter(filter_edges)
 		self.g.purge_edges()
 		self.g.clear_filters()
 
-		# --- store attributes ---
 		self.documents = df.columns
-		self.words = df.index[[get_kind(w) == 1 for w in df.index]]
-		self.keywords = []
+		self.words = df.index[self.g.vp['kind'].a[n_docs:] == 1]
 		for ik in range(2, 2 + self.nbranches):
-			self.keywords.append(df.index[[get_kind(w) == ik for w in df.index]])
+		    self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
 
 
 
@@ -582,7 +568,7 @@ class bionsbm(sbmtm.sbmtm):
 
 
 
-	def save_data_new(self, name: str = "MyBionSBM/mymodel") -> None:
+	def save_data(self, name: str = "MyBionSBM/mymodel") -> None:
 		"""
 		Save the global graph, model, state, and level-specific data for the current nSBM model.
 
@@ -646,5 +632,3 @@ class bionsbm(sbmtm.sbmtm):
 		if errors:
 			msg = "; ".join([f"Level {l}: {err}" for l, err in errors])
 			raise RuntimeError(f"Errors occurred while saving levels: {msg}")
-
-
