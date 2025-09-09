@@ -112,7 +112,6 @@ class bionsbm():
 			self.keywords.append([self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
 
 
-
 	def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: list)->None:
 		"""
 		Create a graph from two dataframes one with words, others with keywords or other layers of information
@@ -185,7 +184,6 @@ class bionsbm():
 			self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
 
 
-
 	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
 		"""
 		Fit using minimize_nested_blockmodel_dl
@@ -235,6 +233,7 @@ class bionsbm():
 		self.groups = {}
 
 
+	# Helper functions
 	def dump_model(self, filename="bionsbm.pkl"):
 		"""
 		Dump model using pickle
@@ -266,209 +265,203 @@ class bionsbm():
 		K = [int(np.sum(self.g.vp['kind'].a == (k+2))) for k in range(self.nbranches)] #keywords
 		return D, W, K
 
-	# Helper functions
+	def get_groups(self, l=0) -> None:
 
-def get_groups_fast_numba(self, l=0) -> None:
-
-	"""
-	Numba-accelerated get_groups that is robust for bipartite graphs (nbranches == 0)
-	and for arbitrary number of partitions.
-	"""
-
-	@njit
-	def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights,
-								  D, W, K_arr, nbranches,
-								  n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
 		"""
-		Numba-compiled loop that increments the stacked accumulator arrays.
-		This function is defensive: if a 'kind' references a branch index out of range,
-		or an index into keywords is out of range, it's ignored (so bipartite graphs keep working).
+		Numba-accelerated get_groups that is robust for bipartite graphs (nbranches == 0)
+		and for arbitrary number of partitions.
 		"""
-		m = len(sources)
-		for i in range(m):
-			v1 = sources[i]
-			v2 = targets[i]
-			w = weights[i]
-			t1 = z1[i]
-			t2 = z2[i]
-			kind = kinds[i]
-	
-			# update doc-group counts (always)
-			n_db[v1, t1] += w
-	
-			if kind == 1:
-				# word node
-				idx_w = v2 - D
-				if idx_w >= 0 and idx_w < n_wb.shape[0]:
-					n_wb[idx_w, t2] += w
-				# update doc->word-group
-				n_dbw[v1, t2] += w
-	
-			elif kind >= 2:
-				ik = kind - 2
-				# guard: only process if ik is a valid branch index
-				if ik >= 0 and ik < nbranches:
-					# compute offset = D + W + sum(K_arr[:ik])
-					offset = D + W
-					for j in range(ik):
-						offset += K_arr[j]
-					idx_k = v2 - offset
-					# guard keyword index bounds
-					if idx_k >= 0 and idx_k < K_arr[ik]:
-						n_w_key_b3[ik, idx_k, t2] += w
-						n_dbw_key3[ik, v1, t2] += w
-					# else: out-of-range keyword index -> ignore to remain robust
-			else:
-				# unexpected kind (<1): ignore for safety (original assumed only kind==1 or >=2)
-				pass
+
+		@njit
+		def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights,
+									  D, W, K_arr, nbranches,
+									  n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
+			"""
+			Numba-compiled loop that increments the stacked accumulator arrays.
+			This function is defensive: if a 'kind' references a branch index out of range,
+			or an index into keywords is out of range, it's ignored (so bipartite graphs keep working).
+			"""
+			m = len(sources)
+			for i in range(m):
+				v1 = sources[i]
+				v2 = targets[i]
+				w = weights[i]
+				t1 = z1[i]
+				t2 = z2[i]
+				kind = kinds[i]
 		
-	if l in model.groups.keys():
-		return model.groups[l]
+				# update doc-group counts (always)
+				n_db[v1, t1] += w
+		
+				if kind == 1:
+					# word node
+					idx_w = v2 - D
+					if idx_w >= 0 and idx_w < n_wb.shape[0]:
+						n_wb[idx_w, t2] += w
+					# update doc->word-group
+					n_dbw[v1, t2] += w
+		
+				elif kind >= 2:
+					ik = kind - 2
+					# guard: only process if ik is a valid branch index
+					if ik >= 0 and ik < nbranches:
+						# compute offset = D + W + sum(K_arr[:ik])
+						offset = D + W
+						for j in range(ik):
+							offset += K_arr[j]
+						idx_k = v2 - offset
+						# guard keyword index bounds
+						if idx_k >= 0 and idx_k < K_arr[ik]:
+							n_w_key_b3[ik, idx_k, t2] += w
+							n_dbw_key3[ik, v1, t2] += w
+						# else: out-of-range keyword index -> ignore to remain robust
+				else:
+					# unexpected kind (<1): ignore for safety (original assumed only kind==1 or >=2)
+					pass
+			
+		if l in model.groups.keys():
+			return model.groups[l]
 
-	state_l = self.state.project_level(l).copy(overlap=True)
-	state_l_edges = state_l.get_edge_blocks()
-	B = state_l.get_B()
-	D, W, K = self._get_shape()
-	nbranches = self.nbranches
+		state_l = self.state.project_level(l).copy(overlap=True)
+		state_l_edges = state_l.get_edge_blocks()
+		B = state_l.get_B()
+		D, W, K = self._get_shape()
+		nbranches = self.nbranches
 
-	# Preallocate primary arrays (word/doc)
-	n_wb = np.zeros((W, B), dtype=np.float64)	# words x word-groups
-	n_db = np.zeros((D, B), dtype=np.float64)	# docs  x doc-groups
-	n_dbw = np.zeros((D, B), dtype=np.float64)   # docs  x word-groups
+		# Preallocate primary arrays (word/doc)
+		n_wb = np.zeros((W, B), dtype=np.float64)	# words x word-groups
+		n_db = np.zeros((D, B), dtype=np.float64)	# docs  x doc-groups
+		n_dbw = np.zeros((D, B), dtype=np.float64)   # docs  x word-groups
 
-	# Preallocate stacked branch arrays (shape: nbranches x max_K x B) and (nbranches x D x B)
-	if nbranches > 0:
-		max_K = int(np.max(K))
-		# If some K are zero, max_K will still be >=0; stack is safe
-		n_w_key_b3 = np.zeros((nbranches, max_K, B), dtype=np.float64)
-		n_dbw_key3 = np.zeros((nbranches, D, B), dtype=np.float64)
-	else:
-		# empty stacked arrays if no branches
-		n_w_key_b3 = np.zeros((0, 0, B), dtype=np.float64)
-		n_dbw_key3 = np.zeros((0, D, B), dtype=np.float64)
+		# Preallocate stacked branch arrays (shape: nbranches x max_K x B) and (nbranches x D x B)
+		if nbranches > 0:
+			max_K = int(np.max(K))
+			# If some K are zero, max_K will still be >=0; stack is safe
+			n_w_key_b3 = np.zeros((nbranches, max_K, B), dtype=np.float64)
+			n_dbw_key3 = np.zeros((nbranches, D, B), dtype=np.float64)
+		else:
+			# empty stacked arrays if no branches
+			n_w_key_b3 = np.zeros((0, 0, B), dtype=np.float64)
+			n_dbw_key3 = np.zeros((0, D, B), dtype=np.float64)
 
-	# Convert graph edges to arrays
-	edges = list(self.g.edges())
-	m = len(edges)
-	sources = np.empty(m, dtype=np.int64)
-	targets = np.empty(m, dtype=np.int64)
-	z1_arr = np.empty(m, dtype=np.int64)
-	z2_arr = np.empty(m, dtype=np.int64)
-	weights = np.empty(m, dtype=np.float64)
-	kinds = np.empty(m, dtype=np.int64)
+		# Convert graph edges to arrays
+		edges = list(self.g.edges())
+		m = len(edges)
+		sources = np.empty(m, dtype=np.int64)
+		targets = np.empty(m, dtype=np.int64)
+		z1_arr = np.empty(m, dtype=np.int64)
+		z2_arr = np.empty(m, dtype=np.int64)
+		weights = np.empty(m, dtype=np.float64)
+		kinds = np.empty(m, dtype=np.int64)
 
-	for i, e in enumerate(edges):
-		sources[i] = int(e.source())
-		targets[i] = int(e.target())
-		z1_arr[i] = int(state_l_edges[e][0])
-		z2_arr[i] = int(state_l_edges[e][1])
-		weights[i] = float(self.g.ep["count"][e])
-		kinds[i] = int(self.g.vp['kind'][int(e.target())])
+		for i, e in enumerate(edges):
+			sources[i] = int(e.source())
+			targets[i] = int(e.target())
+			z1_arr[i] = int(state_l_edges[e][0])
+			z2_arr[i] = int(state_l_edges[e][1])
+			weights[i] = float(self.g.ep["count"][e])
+			kinds[i] = int(self.g.vp['kind'][int(e.target())])
 
-	K_arr = np.array(K, dtype=np.int64)  # can be empty if nbranches==0
+		K_arr = np.array(K, dtype=np.int64)  # can be empty if nbranches==0
 
-	# --- Numba edge processing (single compiled function for all cases) ---
-	process_edges_numba_stack(
-		sources, targets, z1_arr, z2_arr, kinds, weights,
-		D, W, K_arr, nbranches,
-		n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3)
+		# --- Numba edge processing (single compiled function for all cases) ---
+		process_edges_numba_stack(sources, targets, z1_arr, z2_arr, kinds, weights, D, W, K_arr, nbranches, n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3)
 
-	# --- Trim empty columns for doc/word arrays (same logic as original) ---
-	ind_d = np.where(np.sum(n_db, axis=0) > 0)[0]
-	n_db = n_db[:, ind_d]
-	Bd = len(ind_d)
+		# --- Trim empty columns for doc/word arrays (same logic as original) ---
+		ind_d = np.where(np.sum(n_db, axis=0) > 0)[0]
+		n_db = n_db[:, ind_d]
+		Bd = len(ind_d)
 
-	ind_w = np.where(np.sum(n_wb, axis=0) > 0)[0]
-	n_wb = n_wb[:, ind_w]
-	Bw = len(ind_w)
+		ind_w = np.where(np.sum(n_wb, axis=0) > 0)[0]
+		n_wb = n_wb[:, ind_w]
+		Bw = len(ind_w)
 
-	ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0]
-	n_dbw = n_dbw[:, ind_w2]
+		ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0]
+		n_dbw = n_dbw[:, ind_w2]
 
-	# --- Convert stacked branch arrays into per-branch lists (safe slicing) ---
-	n_w_key_b_list = []
-	n_dbw_key_list = []
-	Bk = []
+		# --- Convert stacked branch arrays into per-branch lists (safe slicing) ---
+		n_w_key_b_list = []
+		n_dbw_key_list = []
+		Bk = []
 
-	for ik in range(nbranches):
-		Kk = int(K_arr[ik])
-		if Kk > 0:
-			# compute which columns (groups) are non-zero
-			col_sums = np.sum(n_w_key_b3[ik, :Kk, :], axis=0)
-			ind_wk = np.where(col_sums > 0)[0]
-			# slice and copy into a per-branch array (Kk x Bk)
-			if ind_wk.size > 0:
-				n_w_key_b_list.append(n_w_key_b3[ik, :Kk, :][:, ind_wk].copy())
+		for ik in range(nbranches):
+			Kk = int(K_arr[ik])
+			if Kk > 0:
+				# compute which columns (groups) are non-zero
+				col_sums = np.sum(n_w_key_b3[ik, :Kk, :], axis=0)
+				ind_wk = np.where(col_sums > 0)[0]
+				# slice and copy into a per-branch array (Kk x Bk)
+				if ind_wk.size > 0:
+					n_w_key_b_list.append(n_w_key_b3[ik, :Kk, :][:, ind_wk].copy())
+				else:
+					# keep shape (Kk, 0) if there are no columns
+					n_w_key_b_list.append(np.zeros((Kk, 0), dtype=np.float64))
+				Bk.append(len(ind_wk))
 			else:
-				# keep shape (Kk, 0) if there are no columns
-				n_w_key_b_list.append(np.zeros((Kk, 0), dtype=np.float64))
-			Bk.append(len(ind_wk))
-		else:
-			# branch with 0 keywords
-			n_w_key_b_list.append(np.zeros((0, 0), dtype=np.float64))
-			Bk.append(0)
+				# branch with 0 keywords
+				n_w_key_b_list.append(np.zeros((0, 0), dtype=np.float64))
+				Bk.append(0)
 
-		# doc x keyword-groups for this branch
-		col_sums_dbw = np.sum(n_dbw_key3[ik], axis=0)
-		ind_w2k = np.where(col_sums_dbw > 0)[0]
-		if ind_w2k.size > 0:
-			n_dbw_key_list.append(n_dbw_key3[ik][:, ind_w2k].copy())
-		else:
-			n_dbw_key_list.append(np.zeros((D, 0), dtype=np.float64))
+			# doc x keyword-groups for this branch
+			col_sums_dbw = np.sum(n_dbw_key3[ik], axis=0)
+			ind_w2k = np.where(col_sums_dbw > 0)[0]
+			if ind_w2k.size > 0:
+				n_dbw_key_list.append(n_dbw_key3[ik][:, ind_w2k].copy())
+			else:
+				n_dbw_key_list.append(np.zeros((D, 0), dtype=np.float64))
 
-	# --- Compute probabilities exactly like the original (division -> NaN if denominator==0) ---
-	# P(t_w | w)
-	denom = np.sum(n_wb, axis=1, keepdims=True)  # (W,1)
-	p_tw_w = (n_wb / denom).T
+		# --- Compute probabilities exactly like the original (division -> NaN if denominator==0) ---
+		# P(t_w | w)
+		denom = np.sum(n_wb, axis=1, keepdims=True)  # (W,1)
+		p_tw_w = (n_wb / denom).T
 
-	# P(t_k | keyword) per branch
-	p_tk_w_key = []
-	for ik in range(nbranches):
-		arr = n_w_key_b_list[ik]
-		denom = np.sum(arr, axis=1, keepdims=True)
-		p_tk_w_key.append((arr / denom).T)
+		# P(t_k | keyword) per branch
+		p_tk_w_key = []
+		for ik in range(nbranches):
+			arr = n_w_key_b_list[ik]
+			denom = np.sum(arr, axis=1, keepdims=True)
+			p_tk_w_key.append((arr / denom).T)
 
-	# P(w | t_w)
-	denom = np.sum(n_wb, axis=0, keepdims=True)  # (1,Bw)
-	p_w_tw = n_wb / denom
+		# P(w | t_w)
+		denom = np.sum(n_wb, axis=0, keepdims=True)  # (1,Bw)
+		p_w_tw = n_wb / denom
 
-	# P(keyword | t_w_key) per branch
-	p_w_key_tk = []
-	for ik in range(nbranches):
-		arr = n_w_key_b_list[ik]
-		denom = np.sum(arr, axis=0, keepdims=True)
-		p_w_key_tk.append(arr / denom)
+		# P(keyword | t_w_key) per branch
+		p_w_key_tk = []
+		for ik in range(nbranches):
+			arr = n_w_key_b_list[ik]
+			denom = np.sum(arr, axis=0, keepdims=True)
+			p_w_key_tk.append(arr / denom)
 
-	# P(t_w | d)
-	denom = np.sum(n_dbw, axis=1, keepdims=True)
-	p_tw_d = (n_dbw / denom).T
+		# P(t_w | d)
+		denom = np.sum(n_dbw, axis=1, keepdims=True)
+		p_tw_d = (n_dbw / denom).T
 
-	# P(t_k | d) per branch
-	p_tk_d = []
-	for ik in range(nbranches):
-		arr = n_dbw_key_list[ik]
-		denom = np.sum(arr, axis=1, keepdims=True)
-		p_tk_d.append((arr / denom).T)
+		# P(t_k | d) per branch
+		p_tk_d = []
+		for ik in range(nbranches):
+			arr = n_dbw_key_list[ik]
+			denom = np.sum(arr, axis=1, keepdims=True)
+			p_tk_d.append((arr / denom).T)
 
-	# P(t_d | d)
-	denom = np.sum(n_db, axis=1, keepdims=True)
-	p_td_d = (n_db / denom).T
+		# P(t_d | d)
+		denom = np.sum(n_db, axis=1, keepdims=True)
+		p_td_d = (n_db / denom).T
 
-	result = {
-		'Bd': Bd,
-		'Bw': Bw,
-		'Bk': Bk,
-		'p_tw_w': p_tw_w,
-		'p_tk_w_key': p_tk_w_key,
-		'p_td_d': p_td_d,
-		'p_w_tw': p_w_tw,
-		'p_w_key_tk': p_w_key_tk,
-		'p_tw_d': p_tw_d,
-		'p_tk_d': p_tk_d,
-	}
+		result = {
+			'Bd': Bd,
+			'Bw': Bw,
+			'Bk': Bk,
+			'p_tw_w': p_tw_w,
+			'p_tk_w_key': p_tk_w_key,
+			'p_td_d': p_td_d,
+			'p_w_tw': p_w_tw,
+			'p_w_key_tk': p_w_key_tk,
+			'p_tw_d': p_tw_d,
+			'p_tk_d': p_tk_d}
 
-	self.groups[l] = result
-	return result
+		self.groups[l] = result
+		return result
 
 
 	def draw(self, *args, **kwargs) -> None:
