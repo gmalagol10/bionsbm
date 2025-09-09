@@ -551,10 +551,13 @@ class bionsbm(sbmtm.sbmtm):
 		# --- Save global files ---
 		try:
 			self.save_graph(filename=f"{name}_graph.xml.gz")
-			self.dump_model(filename=f"{name}_self.pkl")
+			self.dump_model(filename=f"{name}_model.pkl")
 
 			with open(f"{name}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
+
+			with open(f"{name}_state.pkl", "wb") as f:
+				pickle.dump(self.state, f)
 
 		except Exception as e:
 			raise RuntimeError(f"Failed to save global files for model '{name}': {e}") from e
