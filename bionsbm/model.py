@@ -214,7 +214,9 @@ class bionsbm(sbmtm.sbmtm):
 
 		if B_max is None:
 			B_max = self.g.num_vertices()
-		print(state_args, flush=True)
+
+		print("multilevel_mcmc_args is \n", multilevel_mcmc_args, flush=True)
+		print("state_args is \n", state_args, flush=True)
 
 		for _ in range(n_init):
 			print("Fit number:", _, flush=True)
