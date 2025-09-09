@@ -1,7 +1,7 @@
 """
 bionsbm
 
-Copyright(C) 2021 fvalle1
+Copyright(C) 2021 fvalle1 & gmalagol10
 
 This program is free software: you can redistribute it and / or modify
 it under the terms of the GNU General Public License as published by
@@ -31,6 +31,8 @@ import functools
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scipy import sparse
+from numba import njit
+
 
 """
 Inherit hSBM code from https://github.com/martingerlach/hSBM_Topicmodel
@@ -262,7 +264,7 @@ class bionsbm(sbmtm.sbmtm):
 		self.mdl = min_entropy
 
 		L = len(self.state.levels)
-		model.L = L
+		self.L = L
 		self.groups = {}
 		"""	  
 		## only trivial bipartite structure
@@ -286,13 +288,6 @@ class bionsbm(sbmtm.sbmtm):
 		"""
 		Dump model using pickle
 
-		To restore the model:
-
-		import cloudpickle as pickle
-		file=open(\"bionsbm.pkl\" ,\"rb\")
-		model = pickle.load(file)
-
-		file.close()
 		"""
 		with open(filename, 'wb') as f:
 			pickle.dump(self, f)
@@ -320,110 +315,112 @@ class bionsbm(sbmtm.sbmtm):
 		return D, W, K
 
 	# Helper functions	  
+
 	def get_groups(self, l=0):
-		"""
-		return groups
 
-		:param l: hierarchy level
-		"""
+	# --- Numba function for edge processing with list of arrays ---
+		@njit
+		def process_edges_numba_list(sources, targets, z1, z2, kinds, weights,
+				                     D, W, K_arr, nbranches,
+				                     n_db, n_wb, n_dbw, n_w_key_b_list, n_dbw_key_list):
 
-		#sort of cache if groups are already estimated avoid re running
-		if l in self.groups.keys():
-			return self.groups[l]
+			for i in range(len(sources)):
+				v1 = sources[i]
+				v2 = targets[i]
+				w = weights[i]
+				t1 = z1[i]
+				t2 = z2[i]
+				kind = kinds[i]
+
+				n_db[v1, t1] += w
+
+				if kind == 1:
+				    n_wb[v2 - D, t2] += w
+				    n_dbw[v1, t2] += w
+				else:
+				    ik = kind - 2
+				    offset = D + W
+				    for j in range(ik):
+				        offset += K_arr[j]
+				    n_w_key_b_list[ik][v2 - offset, t2] += w
+				    n_dbw_key_list[ik][v1, t2] += w
+
+
+	    if l in self.groups:
+	        return self.groups[l]
 
 		state_l = self.state.project_level(l).copy(overlap=True)
 		state_l_edges = state_l.get_edge_blocks()
 		B = state_l.get_B()
 		D, W, K = self._get_shape()
+		nbranches = self.nbranches
 
-		n_wb = np.zeros((W, B))  ## number of half-edges incident on word-node w and labeled as word-group tw
-		n_w_key_b = [np.zeros((K[ik], B)) for ik in range(self.nbranches)]  ## number of half-edges incident on word-node w and labeled as word-group tw
-		n_db = np.zeros((D, B))  ## number of half-edges incident on document-node d and labeled as document-group td
-		n_dbw = np.zeros((D, B)) ## number of half-edges incident on document-node d and labeled as word-group tw
-		n_dbw_key = [np.zeros((D, B)) for _ in range(self.nbranches)] ## number of half-edges incident on document-node d and labeled as keyword-group tw_key
+		# Preallocate arrays
+		n_wb = np.zeros((W, B))
+		n_db = np.zeros((D, B))
+		n_dbw = np.zeros((D, B))
 
-		for e in self.g.edges():
-			z1, z2 = state_l_edges[e]
-			v1 = e.source()
-			v2 = e.target()
-			weight = self.g.ep["count"][e]
-			n_db[int(v1), z1] += weight
-			kind = self.g.vp['kind'][v2]
-			if kind == 1:
-				n_wb[int(v2) - D, z2] += weight
-				n_dbw[int(v1), z2] += weight
-			else:
-				n_w_key_b[kind-2][int(v2) - D - W - sum(K[:(kind-2)]), z2] += weight
-				n_dbw_key[kind-2][int(v1), z2] += weight
+		# For branches, use list of arrays (one per branch) to avoid broadcasting issues
+		n_w_key_b = [np.zeros((K[ik], B)) for ik in range(nbranches)]
+		n_dbw_key = [np.zeros((D, B)) for _ in range(nbranches)]
 
-		#p_w = np.sum(n_wb, axis=1) / float(np.sum(n_wb))
+		# Convert graph edges to arrays
+		edges = list(self.g.edges())
+		sources = np.array([e.source() for e in edges], dtype=np.int64)
+		targets = np.array([e.target() for e in edges], dtype=np.int64)
+		weights = np.array([self.g.ep["count"][e] for e in edges], dtype=np.float64)
+		z1_arr = np.array([state_l_edges[e][0] for e in edges], dtype=np.int64)
+		z2_arr = np.array([state_l_edges[e][1] for e in edges], dtype=np.int64)
+		kinds = np.array([self.g.vp['kind'][v] for v in targets], dtype=np.int64)
 
+		# --- Edge processing (Numba-accelerated) ---
+		process_edges_numba_list(sources, targets, z1_arr, z2_arr, kinds, weights, D, W, K, nbranches, n_db, n_wb, n_dbw, n_w_key_b, n_dbw_key)
+
+		# --- Keep only nonzero columns safely ---
 		ind_d = np.where(np.sum(n_db, axis=0) > 0)[0]
-		Bd = len(ind_d)
 		n_db = n_db[:, ind_d]
+		Bd = len(ind_d)
 
 		ind_w = np.where(np.sum(n_wb, axis=0) > 0)[0]
-		Bw = len(ind_w)
 		n_wb = n_wb[:, ind_w]
+		Bw = len(ind_w)
 
 		ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0]
 		n_dbw = n_dbw[:, ind_w2]
 
-		ind_w_key = []
-		ind_w2_keyword = []
 		Bk = []
+		for ik in range(nbranches):
+		    ind_wk = np.where(np.sum(n_w_key_b[ik], axis=0) > 0)[0]
+		    n_w_key_b[ik] = n_w_key_b[ik][:, ind_wk].copy()
+		    Bk.append(len(ind_wk))
 
-		for ik in range(self.nbranches):
-			ind_w_key.append(np.where(np.sum(n_w_key_b[ik], axis=0) > 0)[0])
-			Bk.append(len(ind_w_key[ik]))
-			n_w_key_b[ik] = n_w_key_b[ik][:, ind_w_key[ik]]
-			
-			ind_w2_keyword.append(np.where(np.sum(n_dbw_key[ik], axis=0) > 0)[0])
-			n_dbw_key[ik] = n_dbw_key[ik][:, ind_w2_keyword[ik]]
-		
+		    ind_w2k = np.where(np.sum(n_dbw_key[ik], axis=0) > 0)[0]
+		    n_dbw_key[ik] = n_dbw_key[ik][:, ind_w2k].copy()
 
-		# group membership of each word-node P(t_w | w)
-		p_tw_w = (n_wb / np.sum(n_wb, axis=1)[:, np.newaxis]).T
+		# --- Compute probabilities ---
+		p_tw_w = (n_wb / np.nansum(n_wb, axis=1)[:, None]).T
+		p_tk_w_key = [(n_w_key_b[ik] / np.nansum(n_w_key_b[ik], axis=1)[:, None]).T
+		              for ik in range(nbranches)]
+		p_w_tw = n_wb / np.nansum(n_wb, axis=0)[None, :]
+		p_w_key_tk = [n_w_key_b[ik] / np.nansum(n_w_key_b[ik], axis=0)[None, :]
+		              for ik in range(nbranches)]
+		p_tw_d = (n_dbw / np.nansum(n_dbw, axis=1)[:, None]).T
+		p_tk_d = [(n_dbw_key[ik] / np.nansum(n_dbw_key[ik], axis=1)[:, None]).T
+		          for ik in range(nbranches)]
+		p_td_d = (n_db / np.nansum(n_db, axis=1)[:, None]).T
 
-		p_tk_w_key = []
-		for ik in range(self.nbranches):
-			# group membership of each keyword-node P(t_k | keyword)
-			p_tk_w_key.append((n_w_key_b[ik] / np.sum(n_w_key_b[ik], axis=1)[:, np.newaxis]).T)
-		
-		## topic-distribution for words P(w | t_w)
-		p_w_tw = n_wb / np.sum(n_wb, axis=0)[np.newaxis, :]
-		
-		p_w_key_tk = []
-		for ik in range(self.nbranches):
-			## topickey-distribution for keywords P(keyword | t_w_key)
-			p_w_key_tk.append(n_w_key_b[ik] / np.sum(n_w_key_b[ik], axis=0)[np.newaxis, :])
-		
-		## Mixture of word-groups into documetns P(t_w | d)
-		p_tw_d = (n_dbw / np.sum(n_dbw, axis=1)[:, np.newaxis]).T
-
-		p_tk_d = []
-		for ik in range(self.nbranches):
-			## Mixture of word-groups into documetns P(t_w | d)
-			p_tk_d.append((n_dbw_key[ik] / np.sum(n_dbw_key[ik], axis=1)[:, np.newaxis]).T)
-		
-		# group membership of each doc-node P(t_d | d)
-		p_td_d = (n_db / np.sum(n_db, axis=1)[:, np.newaxis]).T
-
-		result = {}
-		result['Bd'] = Bd
-		result['Bw'] = Bw
-		result['Bk'] = Bk
-		result['p_tw_w'] = p_tw_w
-		result["p_tk_w_key"] = p_tk_w_key
-		result['p_td_d'] = p_td_d
-		result['p_w_tw'] = p_w_tw
-		result['p_w_key_tk'] = p_w_key_tk
-		result['p_tw_d'] = p_tw_d
-		result['p_tk_d'] = p_tk_d
+		result = {	'Bd': Bd, 'Bw': Bw, 'Bk': Bk,
+					'p_tw_w': p_tw_w,
+					'p_tk_w_key': p_tk_w_key,
+					'p_td_d': p_td_d,
+					'p_w_tw': p_w_tw,
+					'p_w_key_tk': p_w_key_tk,
+					'p_tw_d': p_tw_d,
+					'p_tk_d': p_tk_d}
 
 		self.groups[l] = result
-
 		return result
+
 	
 	def metadata(self, l=0, n=10, kind=2):
 		'''
@@ -571,7 +568,7 @@ class bionsbm(sbmtm.sbmtm):
 
 	def save_data(self, name: str = "results/mymodel") -> None:
 		"""
-		Save the global graph, model, state, and level-specific data for the current nSBM model.
+		Save the global graph, model, state, and level-specific data for the current nSBM self.
 
 		Parameters
 		----------
@@ -579,7 +576,7 @@ class bionsbm(sbmtm.sbmtm):
 			Base path (folder + prefix) where all outputs will be saved.
 			Example: "results/mymodel" will produce:
 				- results/mymodel_graph.xml.gz
-				- results/mymodel_model.pkl	
+				- results/mymodel_self.pkl	
 				- results/mymodel_entropy.txt
 				- results/mymodel_state.pkl
 				- results/mymodel_level_X_*.tsv.gz  (per level, up to 6 levels)
@@ -604,7 +601,7 @@ class bionsbm(sbmtm.sbmtm):
 		# --- Save global files ---
 		try:
 			self.save_graph(filename=f"{name}_graph.xml.gz")
-			self.dump_model(filename=f"{name}_model.pkl")
+			self.dump_model(filename=f"{name}_self.pkl")
 
 			with open(f"{name}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
