@@ -49,7 +49,7 @@ class bionsbm(sbmtm.sbmtm):
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label=None, fast=True):
+	def __init__(self, obj, label=None):
 		super().__init__()
 		self.keywords = []
 		self.nbranches = 1
@@ -58,11 +58,11 @@ class bionsbm(sbmtm.sbmtm):
 		if isinstance(obj, mu.MuData):
 			self.modalities=list(obj.mod.keys())   
 			dfs=[obj[key].to_df().T for key in self.modalities]
-			self.make_graph_multiple_df(dfs[0], dfs[1:], fast=fast)
+			self.make_graph_multiple_df(dfs[0], dfs[1:])
 
 		elif isinstance(obj, ad.AnnData):
 			self.modalities=["Mod1"]
-			self.make_graph_multiple_df(obj.to_df().T, fast=fast)
+			self.make_graph_multiple_df(obj.to_df().T)
 
 		if label:
 			g_raw=self.g.copy()
