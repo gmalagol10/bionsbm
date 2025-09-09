@@ -36,8 +36,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from scipy import sparse
 from numba import njit
 
-from . import sbmtm
-
 
 """
 Inherit hSBM code from https://github.com/martingerlach/hSBM_Topicmodel
@@ -45,7 +43,7 @@ Inherit hSBM code from https://github.com/martingerlach/hSBM_Topicmodel
 from . import sbmtm
 
 
-class bionsbm(sbmtm.sbmtm):
+class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
@@ -55,6 +53,7 @@ class bionsbm(sbmtm.sbmtm):
 		self.nbranches = 1
 		self.modalities = []
 		self.max_depth = max_depth
+		model.obj = obj
 
 		if isinstance(obj, mu.MuData):
 			self.modalities=list(obj.mod.keys())   
@@ -133,7 +132,7 @@ class bionsbm(sbmtm.sbmtm):
 
 		self.nbranches = len(df_keyword_list)
 	   
-		self.make_graph(df_all.drop("kind", axis=1), get_kind)
+		self.make_graph(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
 
 
 	def make_graph(self, df: pd.DataFrame, get_kind):
@@ -256,7 +255,7 @@ class bionsbm(sbmtm.sbmtm):
 
 		Proxy to self.state.entropy()
 		"""
-		return super().get_mdl()
+		return self.mdl
 			
 	def _get_shape(self):
 		"""
@@ -585,3 +584,22 @@ class bionsbm(sbmtm.sbmtm):
 		if errors:
 			msg = "; ".join([f"Level {l}: {err}" for l, err in errors])
 			raise RuntimeError(f"Errors occurred while saving levels: {msg}")
+
+
+    def get_V(self):
+        '''
+        return number of word-nodes == types
+        '''
+        return int(np.sum(self.g.vp['kind'].a == 1))  # no. of types
+
+    def get_D(self):
+        '''
+        return number of doc-nodes == number of documents
+        '''
+        return int(np.sum(self.g.vp['kind'].a == 0))  # no. of types
+
+    def get_N(self):
+        '''
+        return number of edges == tokens
+        '''
+        return int(self.g.num_edges())  # no. of types
