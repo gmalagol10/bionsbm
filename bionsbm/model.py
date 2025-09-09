@@ -47,7 +47,7 @@ class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label=None, max_depth=6):
+	def __init__(self, obj, label=None, max_depth=6, modality="Mod1"):
 		super().__init__()
 		self.keywords = []
 		self.nbranches = 1
@@ -61,7 +61,7 @@ class bionsbm():
 			self.make_graph_multiple_df(dfs[0], dfs[1:])
 
 		elif isinstance(obj, ad.AnnData):
-			self.modalities=["Mod1"]
+			self.modalities=[modality]
 			self.make_graph_multiple_df(obj.to_df().T, [])
 
 		if label:
@@ -82,7 +82,6 @@ class bionsbm():
 			node_type=None
 		self.node_type=node_type 
 
-
 		
 	def save_graph(self, filename="graph.xml.gz")->None:
 		"""
@@ -91,7 +90,8 @@ class bionsbm():
 		:param filename: name of the graph stored
 		"""
 		self.g.save(filename)
-		
+	
+	
 	def load_graph(self, filename="graph.xml.gz")->None:
 		"""
 		Load a saved graph from disk and rebuild documents, words, and keywords.
@@ -99,7 +99,7 @@ class bionsbm():
 		Parameters
 		----------
 		filename : str, optional
-		    Path to the saved graph file (default: "graph.xml.gz").
+			Path to the saved graph file (default: "graph.xml.gz").
 		"""
 
 		self.g = gt.load_graph(filename)
@@ -109,8 +109,8 @@ class bionsbm():
 		metadata_indexes = metadata_indexes[metadata_indexes > 1] #no doc or words
 		self.nbranches = len(metadata_indexes)
 		for i_keyword in metadata_indexes:
-			self.keywords.append([self.g.vp['name'][v]
-										for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
+			self.keywords.append([self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
+
 
 
 	def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: list)->None:
@@ -151,12 +151,12 @@ class bionsbm():
 
 		# Assign doc vertices (loop for names, array for kind)
 		for i, doc in enumerate(df.columns):
-		    name[self.g.vertex(i)] = doc
+			name[self.g.vertex(i)] = doc
 		kind.get_array()[:n_docs] = 0
 
 		# Assign word vertices (loop for names, array for kind)
 		for j, word in enumerate(df.index):
-		    name[self.g.vertex(n_docs + j)] = word
+			name[self.g.vertex(n_docs + j)] = word
 		kind.get_array()[n_docs:] = np.array([get_kind(w) for w in df.index], dtype=int)
 
 		# Edge weights
@@ -174,7 +174,7 @@ class bionsbm():
 		# Remove edges with 0 weight
 		filter_edges = self.g.new_edge_property("bool")
 		for e in self.g.edges():
-		    filter_edges[e] = weight[e] > 0
+			filter_edges[e] = weight[e] > 0
 		self.g.set_edge_filter(filter_edges)
 		self.g.purge_edges()
 		self.g.clear_filters()
@@ -182,7 +182,7 @@ class bionsbm():
 		self.documents = df.columns
 		self.words = df.index[self.g.vp['kind'].a[n_docs:] == 1]
 		for ik in range(2, 2 + self.nbranches):
-		    self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
+			self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
 
 
 
@@ -266,148 +266,209 @@ class bionsbm():
 		K = [int(np.sum(self.g.vp['kind'].a == (k+2))) for k in range(self.nbranches)] #keywords
 		return D, W, K
 
-	# Helper functions	  
+	# Helper functions
 
-	def get_groups(self, l=0):
+def get_groups_fast_numba(self, l=0) -> None:
 
-	# --- Numba function for edge processing with list of arrays ---
-		@njit
-		def process_edges_numba_list(sources, targets, z1, z2, kinds, weights,
-				                     D, W, K_arr, nbranches,
-				                     n_db, n_wb, n_dbw, n_w_key_b_list, n_dbw_key_list):
+	"""
+	Numba-accelerated get_groups that is robust for bipartite graphs (nbranches == 0)
+	and for arbitrary number of partitions.
+	"""
 
-			for i in range(len(sources)):
-				v1 = sources[i]
-				v2 = targets[i]
-				w = weights[i]
-				t1 = z1[i]
-				t2 = z2[i]
-				kind = kinds[i]
-
-				n_db[v1, t1] += w
-
-				if kind == 1:
-				    n_wb[v2 - D, t2] += w
-				    n_dbw[v1, t2] += w
-				else:
-				    ik = kind - 2
-				    offset = D + W
-				    for j in range(ik):
-				        offset += K_arr[j]
-				    n_w_key_b_list[ik][v2 - offset, t2] += w
-				    n_dbw_key_list[ik][v1, t2] += w
-
-
-		if l in self.groups:
-			return self.groups[l]
-
-		state_l = self.state.project_level(l).copy(overlap=True)
-		state_l_edges = state_l.get_edge_blocks()
-		B = state_l.get_B()
-		D, W, K = self._get_shape()
-		nbranches = self.nbranches
-
-		# Preallocate arrays
-		n_wb = np.zeros((W, B))
-		n_db = np.zeros((D, B))
-		n_dbw = np.zeros((D, B))
-
-		# For branches, use list of arrays (one per branch) to avoid broadcasting issues
-		n_w_key_b = [np.zeros((K[ik], B)) for ik in range(nbranches)]
-		n_dbw_key = [np.zeros((D, B)) for _ in range(nbranches)]
-
-		# Convert graph edges to arrays
-		edges = list(self.g.edges())
-		sources = np.array([e.source() for e in edges], dtype=np.int64)
-		targets = np.array([e.target() for e in edges], dtype=np.int64)
-		weights = np.array([self.g.ep["count"][e] for e in edges], dtype=np.float64)
-		z1_arr = np.array([state_l_edges[e][0] for e in edges], dtype=np.int64)
-		z2_arr = np.array([state_l_edges[e][1] for e in edges], dtype=np.int64)
-		kinds = np.array([self.g.vp['kind'][v] for v in targets], dtype=np.int64)
-
-		# --- Edge processing (Numba-accelerated) ---
-		process_edges_numba_list(sources, targets, z1_arr, z2_arr, kinds, weights, D, W, K, nbranches, n_db, n_wb, n_dbw, n_w_key_b, n_dbw_key)
-
-		# --- Keep only nonzero columns safely ---
-		ind_d = np.where(np.sum(n_db, axis=0) > 0)[0]
-		n_db = n_db[:, ind_d]
-		Bd = len(ind_d)
-
-		ind_w = np.where(np.sum(n_wb, axis=0) > 0)[0]
-		n_wb = n_wb[:, ind_w]
-		Bw = len(ind_w)
-
-		ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0]
-		n_dbw = n_dbw[:, ind_w2]
-
-		Bk = []
-		for ik in range(nbranches):
-		    ind_wk = np.where(np.sum(n_w_key_b[ik], axis=0) > 0)[0]
-		    n_w_key_b[ik] = n_w_key_b[ik][:, ind_wk].copy()
-		    Bk.append(len(ind_wk))
-
-		    ind_w2k = np.where(np.sum(n_dbw_key[ik], axis=0) > 0)[0]
-		    n_dbw_key[ik] = n_dbw_key[ik][:, ind_w2k].copy()
-
-		# --- Compute probabilities ---
-		p_tw_w = (n_wb / np.nansum(n_wb, axis=1)[:, None]).T
-		p_tk_w_key = [(n_w_key_b[ik] / np.nansum(n_w_key_b[ik], axis=1)[:, None]).T
-		              for ik in range(nbranches)]
-		p_w_tw = n_wb / np.nansum(n_wb, axis=0)[None, :]
-		p_w_key_tk = [n_w_key_b[ik] / np.nansum(n_w_key_b[ik], axis=0)[None, :]
-		              for ik in range(nbranches)]
-		p_tw_d = (n_dbw / np.nansum(n_dbw, axis=1)[:, None]).T
-		p_tk_d = [(n_dbw_key[ik] / np.nansum(n_dbw_key[ik], axis=1)[:, None]).T
-		          for ik in range(nbranches)]
-		p_td_d = (n_db / np.nansum(n_db, axis=1)[:, None]).T
-
-		result = {	'Bd': Bd, 'Bw': Bw, 'Bk': Bk,
-					'p_tw_w': p_tw_w,
-					'p_tk_w_key': p_tk_w_key,
-					'p_td_d': p_td_d,
-					'p_w_tw': p_w_tw,
-					'p_w_key_tk': p_w_key_tk,
-					'p_tw_d': p_tw_d,
-					'p_tk_d': p_tk_d}
-
-		self.groups[l] = result
-		return result
-
+	@njit
+	def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights,
+								  D, W, K_arr, nbranches,
+								  n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
+		"""
+		Numba-compiled loop that increments the stacked accumulator arrays.
+		This function is defensive: if a 'kind' references a branch index out of range,
+		or an index into keywords is out of range, it's ignored (so bipartite graphs keep working).
+		"""
+		m = len(sources)
+		for i in range(m):
+			v1 = sources[i]
+			v2 = targets[i]
+			w = weights[i]
+			t1 = z1[i]
+			t2 = z2[i]
+			kind = kinds[i]
 	
-	def metadata(self, l=0, n=10, kind=2):
-		'''
-		get the n most common keywords for each keyword-group in level l.
+			# update doc-group counts (always)
+			n_db[v1, t1] += w
+	
+			if kind == 1:
+				# word node
+				idx_w = v2 - D
+				if idx_w >= 0 and idx_w < n_wb.shape[0]:
+					n_wb[idx_w, t2] += w
+				# update doc->word-group
+				n_dbw[v1, t2] += w
+	
+			elif kind >= 2:
+				ik = kind - 2
+				# guard: only process if ik is a valid branch index
+				if ik >= 0 and ik < nbranches:
+					# compute offset = D + W + sum(K_arr[:ik])
+					offset = D + W
+					for j in range(ik):
+						offset += K_arr[j]
+					idx_k = v2 - offset
+					# guard keyword index bounds
+					if idx_k >= 0 and idx_k < K_arr[ik]:
+						n_w_key_b3[ik, idx_k, t2] += w
+						n_dbw_key3[ik, v1, t2] += w
+					# else: out-of-range keyword index -> ignore to remain robust
+			else:
+				# unexpected kind (<1): ignore for safety (original assumed only kind==1 or >=2)
+				pass
 		
-		:return: tuples (keyword,P(kw|tk))
-		'''
+	if l in model.groups.keys():
+		return model.groups[l]
 
-		dict_groups = self.get_groups(l)
-		Bw = dict_groups['Bk'][kind-2]
-		p_w_tw = dict_groups['p_w_key_tk'][kind-2]
+	state_l = self.state.project_level(l).copy(overlap=True)
+	state_l_edges = state_l.get_edge_blocks()
+	B = state_l.get_B()
+	D, W, K = self._get_shape()
+	nbranches = self.nbranches
 
-		words = self.keywords[kind-2]
+	# Preallocate primary arrays (word/doc)
+	n_wb = np.zeros((W, B), dtype=np.float64)	# words x word-groups
+	n_db = np.zeros((D, B), dtype=np.float64)	# docs  x doc-groups
+	n_dbw = np.zeros((D, B), dtype=np.float64)   # docs  x word-groups
 
-		## loop over all word-groups
-		dict_group_keywords = {}
-		for tw in range(Bw):
-			p_w_ = p_w_tw[:, tw]
-			ind_w_ = np.argsort(p_w_)[::-1]
-			list_words_tw = []
-			for i in ind_w_[:n]:
-				if p_w_[i] > 0:
-					list_words_tw += [(words[i], p_w_[i])]
-				else:
-					break
-			dict_group_keywords[tw] = list_words_tw
-		return dict_group_keywords
+	# Preallocate stacked branch arrays (shape: nbranches x max_K x B) and (nbranches x D x B)
+	if nbranches > 0:
+		max_K = int(np.max(K))
+		# If some K are zero, max_K will still be >=0; stack is safe
+		n_w_key_b3 = np.zeros((nbranches, max_K, B), dtype=np.float64)
+		n_dbw_key3 = np.zeros((nbranches, D, B), dtype=np.float64)
+	else:
+		# empty stacked arrays if no branches
+		n_w_key_b3 = np.zeros((0, 0, B), dtype=np.float64)
+		n_dbw_key3 = np.zeros((0, D, B), dtype=np.float64)
 
-	def metadatumdist(self, doc_index, l=0, kind=2):
-		dict_groups = self.get_groups(l)
-		p_tk_d = dict_groups['p_tk_d'][kind-2]
-		list_topics_tk = []
-		for tk, p_tk in enumerate(p_tk_d[:, doc_index]):
-			list_topics_tk += [(tk, p_tk)]
-		return list_topics_tk
+	# Convert graph edges to arrays
+	edges = list(self.g.edges())
+	m = len(edges)
+	sources = np.empty(m, dtype=np.int64)
+	targets = np.empty(m, dtype=np.int64)
+	z1_arr = np.empty(m, dtype=np.int64)
+	z2_arr = np.empty(m, dtype=np.int64)
+	weights = np.empty(m, dtype=np.float64)
+	kinds = np.empty(m, dtype=np.int64)
+
+	for i, e in enumerate(edges):
+		sources[i] = int(e.source())
+		targets[i] = int(e.target())
+		z1_arr[i] = int(state_l_edges[e][0])
+		z2_arr[i] = int(state_l_edges[e][1])
+		weights[i] = float(self.g.ep["count"][e])
+		kinds[i] = int(self.g.vp['kind'][int(e.target())])
+
+	K_arr = np.array(K, dtype=np.int64)  # can be empty if nbranches==0
+
+	# --- Numba edge processing (single compiled function for all cases) ---
+	process_edges_numba_stack(
+		sources, targets, z1_arr, z2_arr, kinds, weights,
+		D, W, K_arr, nbranches,
+		n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3)
+
+	# --- Trim empty columns for doc/word arrays (same logic as original) ---
+	ind_d = np.where(np.sum(n_db, axis=0) > 0)[0]
+	n_db = n_db[:, ind_d]
+	Bd = len(ind_d)
+
+	ind_w = np.where(np.sum(n_wb, axis=0) > 0)[0]
+	n_wb = n_wb[:, ind_w]
+	Bw = len(ind_w)
+
+	ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0]
+	n_dbw = n_dbw[:, ind_w2]
+
+	# --- Convert stacked branch arrays into per-branch lists (safe slicing) ---
+	n_w_key_b_list = []
+	n_dbw_key_list = []
+	Bk = []
+
+	for ik in range(nbranches):
+		Kk = int(K_arr[ik])
+		if Kk > 0:
+			# compute which columns (groups) are non-zero
+			col_sums = np.sum(n_w_key_b3[ik, :Kk, :], axis=0)
+			ind_wk = np.where(col_sums > 0)[0]
+			# slice and copy into a per-branch array (Kk x Bk)
+			if ind_wk.size > 0:
+				n_w_key_b_list.append(n_w_key_b3[ik, :Kk, :][:, ind_wk].copy())
+			else:
+				# keep shape (Kk, 0) if there are no columns
+				n_w_key_b_list.append(np.zeros((Kk, 0), dtype=np.float64))
+			Bk.append(len(ind_wk))
+		else:
+			# branch with 0 keywords
+			n_w_key_b_list.append(np.zeros((0, 0), dtype=np.float64))
+			Bk.append(0)
+
+		# doc x keyword-groups for this branch
+		col_sums_dbw = np.sum(n_dbw_key3[ik], axis=0)
+		ind_w2k = np.where(col_sums_dbw > 0)[0]
+		if ind_w2k.size > 0:
+			n_dbw_key_list.append(n_dbw_key3[ik][:, ind_w2k].copy())
+		else:
+			n_dbw_key_list.append(np.zeros((D, 0), dtype=np.float64))
+
+	# --- Compute probabilities exactly like the original (division -> NaN if denominator==0) ---
+	# P(t_w | w)
+	denom = np.sum(n_wb, axis=1, keepdims=True)  # (W,1)
+	p_tw_w = (n_wb / denom).T
+
+	# P(t_k | keyword) per branch
+	p_tk_w_key = []
+	for ik in range(nbranches):
+		arr = n_w_key_b_list[ik]
+		denom = np.sum(arr, axis=1, keepdims=True)
+		p_tk_w_key.append((arr / denom).T)
+
+	# P(w | t_w)
+	denom = np.sum(n_wb, axis=0, keepdims=True)  # (1,Bw)
+	p_w_tw = n_wb / denom
+
+	# P(keyword | t_w_key) per branch
+	p_w_key_tk = []
+	for ik in range(nbranches):
+		arr = n_w_key_b_list[ik]
+		denom = np.sum(arr, axis=0, keepdims=True)
+		p_w_key_tk.append(arr / denom)
+
+	# P(t_w | d)
+	denom = np.sum(n_dbw, axis=1, keepdims=True)
+	p_tw_d = (n_dbw / denom).T
+
+	# P(t_k | d) per branch
+	p_tk_d = []
+	for ik in range(nbranches):
+		arr = n_dbw_key_list[ik]
+		denom = np.sum(arr, axis=1, keepdims=True)
+		p_tk_d.append((arr / denom).T)
+
+	# P(t_d | d)
+	denom = np.sum(n_db, axis=1, keepdims=True)
+	p_td_d = (n_db / denom).T
+
+	result = {
+		'Bd': Bd,
+		'Bw': Bw,
+		'Bk': Bk,
+		'p_tw_w': p_tw_w,
+		'p_tk_w_key': p_tk_w_key,
+		'p_td_d': p_td_d,
+		'p_w_tw': p_w_tw,
+		'p_w_key_tk': p_w_key_tk,
+		'p_tw_d': p_tw_d,
+		'p_tk_d': p_tk_d,
+	}
+
+	self.groups[l] = result
+	return result
 
 
 	def draw(self, *args, **kwargs) -> None:
@@ -489,10 +550,20 @@ class bionsbm():
 			except Exception as e:
 				raise RuntimeError(f"Failed to save {filepath}: {e}") from e
 
+		# --- P(document | cluster) ---
+		clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
+		_safe_save(clusters, f"{name}_level_{l}_clusters.tsv.gz")
+
+
 		# --- P(main_feature | main_topic) ---
 		p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
 		_safe_save(p_w_tw, f"{name}_level_{l}_{main_feature}_topics.tsv.gz")
+
+		# --- P(main_topic | documents) ---
+		p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
+			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
+		_safe_save(p_tw_d, f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz")
 
 		# --- P(meta_feature | meta_topic_feature), if any ---
 		if len(self.modalities) > 1:
@@ -501,14 +572,6 @@ class bionsbm():
 					columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
 				_safe_save(feat_topic, f"{name}_level_{l}_{meta_features}_topics.tsv.gz")
 
-			# --- P(document | cluster) ---
-			clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
-			_safe_save(clusters, f"{name}_level_{l}_clusters.tsv.gz")
-
-			# --- P(main_topic | documents) ---
-			p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
-				columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-			_safe_save(p_tw_d, f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz")
 
 			# --- P(meta_topic | document) ---
 			for k, meta_features in enumerate(self.modalities[1:]):
@@ -586,20 +649,20 @@ class bionsbm():
 			raise RuntimeError(f"Errors occurred while saving levels: {msg}")
 
 
-    def get_V(self):
-        '''
-        return number of word-nodes == types
-        '''
-        return int(np.sum(self.g.vp['kind'].a == 1))  # no. of types
+	def get_V(self):
+		'''
+		return number of word-nodes == types
+		'''
+		return int(np.sum(self.g.vp['kind'].a == 1))  # no. of types
 
-    def get_D(self):
-        '''
-        return number of doc-nodes == number of documents
-        '''
-        return int(np.sum(self.g.vp['kind'].a == 0))  # no. of types
+	def get_D(self):
+		'''
+		return number of doc-nodes == number of documents
+		'''
+		return int(np.sum(self.g.vp['kind'].a == 0))  # no. of types
 
-    def get_N(self):
-        '''
-        return number of edges == tokens
-        '''
-        return int(self.g.num_edges())  # no. of types
+	def get_N(self):
+		'''
+		return number of edges == tokens
+		'''
+		return int(self.g.num_edges())  # no. of types
