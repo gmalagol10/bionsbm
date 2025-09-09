@@ -53,7 +53,7 @@ class bionsbm():
 		self.nbranches = 1
 		self.modalities = []
 		self.max_depth = max_depth
-		model.obj = obj
+		self.obj = obj
 
 		if isinstance(obj, mu.MuData):
 			self.modalities=list(obj.mod.keys())   
@@ -62,7 +62,7 @@ class bionsbm():
 
 		elif isinstance(obj, ad.AnnData):
 			self.modalities=["Mod1"]
-			self.make_graph_multiple_df(obj.to_df().T)
+			self.make_graph_multiple_df(obj.to_df().T, [])
 
 		if label:
 			g_raw=self.g.copy()
