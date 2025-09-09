@@ -297,6 +297,11 @@ class bionsbm(sbmtm.sbmtm):
 		with open(filename, 'wb') as f:
 			pickle.dump(self, f)
 
+	def load_model(self, , filename="bionsbm.pkl"):
+		file_=open(filename,"rb")
+		model = pickle.load(file_)
+
+
 	def get_mdl(self):
 		"""
 		Get minimum description length
@@ -604,8 +609,6 @@ class bionsbm(sbmtm.sbmtm):
 			with open(f"{name}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
 
-			with open(f"{name}_state.pkl", "wb") as f:
-				pickle.dump(self.state, f)
 		except Exception as e:
 			raise RuntimeError(f"Failed to save global files for model '{name}': {e}") from e
 
