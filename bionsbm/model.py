@@ -20,18 +20,23 @@ along with this program.  If not, see < http: // www.gnu.org/licenses/>.
 
 import warnings
 warnings.filterwarnings("ignore")
+import functools
+import os, sys
+
 import graph_tool.all as gt
 import numpy as np
 import pandas as pd
 import cloudpickle as pickle
-import os, sys
-import muon as mu
 import scanpy as sc
-import functools
+import anndata as ad
+import muon as mu
+
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scipy import sparse
 from numba import njit
+
+from . import sbmtm
 
 
 """
@@ -57,7 +62,7 @@ class bionsbm(sbmtm.sbmtm):
 
 		elif isinstance(obj, ad.AnnData):
 			self.modalities=["Mod1"]
-			self.make_graph_multiple_df(dfs[0], fast=fast)
+			self.make_graph_multiple_df(obj.to_df().T, fast=fast)
 
 		if label:
 			g_raw=self.g.copy()
@@ -89,10 +94,14 @@ class bionsbm(sbmtm.sbmtm):
 		
 	def load_graph(self, filename="graph.xml.gz")->None:
 		"""
-		Load a presaved graph
+		Load a saved graph from disk and rebuild documents, words, and keywords.
 
-		:param filename: graph to load
+		Parameters
+		----------
+		filename : str, optional
+		    Path to the saved graph file (default: "graph.xml.gz").
 		"""
+
 		self.g = gt.load_graph(filename)
 		self.documents = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 0]
 		self.words = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 1]
@@ -104,7 +113,7 @@ class bionsbm(sbmtm.sbmtm):
 										for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
 
 
-	def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: list, fast=True)->None:
+	def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: list)->None:
 		"""
 		Create a graph from two dataframes one with words, others with keywords or other layers of information
 
@@ -123,55 +132,10 @@ class bionsbm(sbmtm.sbmtm):
 
 		self.nbranches = len(df_keyword_list)
 	   
-		if fast:
-			self.make_graph_fast(df_all.drop("kind", axis=1), get_kind)
-		else:
-			self.make_graph(df_all.drop("kind", axis=1), get_kind)
+		self.make_graph(df_all.drop("kind", axis=1), get_kind)
 
 
-	def make_graph(self, df: pd.DataFrame, get_kind)->None:
-		"""
-		Create a graph from a pandas DataFrame
-
-		:param df: DataFrame with words on index and texts on columns. Actually this is a BoW.
-		:param get_kind: function that returns 1 or 2 given an element of df.index. [1 for words 2 for keywords]
-		"""
-		self.g = gt.Graph(directed=False)
-		name = self.g.vp["name"] = self.g.new_vp("string")
-		kind = self.g.vp["kind"] = self.g.new_vp("int")
-		weight = self.g.ep["count"] = self.g.new_ep("int")
-		
-		for doc in df.columns:
-			d = self.g.add_vertex()
-			name[d] = doc
-			kind[d] = 0
-			
-		for word in df.index:
-			w = self.g.add_vertex()
-			name[w] = word
-			kind[w] = get_kind(word)
-
-		D = df.shape[1]
-		
-		for i_doc, doc in enumerate(df.columns):
-			text = df[doc]
-			self.g.add_edge_list([(i_doc,D + x[0][0],x[1]) for x in zip(enumerate(df.index),text)], eprops=[weight])
-
-		filter_edges = self.g.new_edge_property("bool")
-		for e in self.g.edges():
-			filter_edges[e] = weight[e]>0
-
-		self.g.set_edge_filter(filter_edges)
-		self.g.purge_edges()
-		self.g.clear_filters()
-		
-		self.documents = df.columns
-		self.words = df.index[self.g.vp['kind'].a[D:] == 1]
-		for ik in range(2,2+self.nbranches):# 2 is doc and words
-			self.keywords.append(df.index[self.g.vp['kind'].a[D:] == ik])
-		
-
-	def make_graph_fast(self, df: pd.DataFrame, get_kind):
+	def make_graph(self, df: pd.DataFrame, get_kind):
 		self.g = gt.Graph(directed=False)
 
 		n_docs, n_words = df.shape[1], df.shape[0]
@@ -201,9 +165,10 @@ class bionsbm(sbmtm.sbmtm):
 
 		# Build sparse edges
 		rows, cols = df.values.nonzero()
-		vals = df.values[rows, cols]
+		vals = df.values[rows, cols].astype(int)
 		edges = [(c, n_docs + r, v) for r, c, v in zip(rows, cols, vals)]
-		
+		if len(edges)==0: raise ValueError("Empty graph")
+
 		self.g.add_edge_list(edges, eprops=[weight])
 
 		# Remove edges with 0 weight
@@ -266,22 +231,6 @@ class bionsbm(sbmtm.sbmtm):
 		L = len(self.state.levels)
 		self.L = L
 		self.groups = {}
-		"""	  
-		## only trivial bipartite structure
-		if L == 2:
-			self.L = 1
-			for l in range(L - 1):
-				dict_groups_l = self.get_groups(l=l)
-				dict_groups_L[l] = dict_groups_l
-		## omit trivial levels: l=L-1 (single group), l=L-2 (tripartite)
-		else:
-			self.L = L - 2
-			for l in range(L - 2):
-				dict_groups_l = self.get_groups(l=l)
-				dict_groups_L[l] = dict_groups_l
-		self.groups = dict_groups_L
-		"""
-
 
 
 	def dump_model(self, filename="bionsbm.pkl"):
@@ -292,9 +241,10 @@ class bionsbm(sbmtm.sbmtm):
 		with open(filename, 'wb') as f:
 			pickle.dump(self, f)
 
-	def load_model(self, , filename="bionsbm.pkl"):
-		file_=open(filename,"rb")
-		model = pickle.load(file_)
+	def load_model(self, filename="bionsbm.pkl"):
+		with open(filename, "rb") as f:
+			model = pickle.load(f)
+		return model
 
 
 	def get_mdl(self):
@@ -346,8 +296,8 @@ class bionsbm(sbmtm.sbmtm):
 				    n_dbw_key_list[ik][v1, t2] += w
 
 
-	    if l in self.groups:
-	        return self.groups[l]
+		if l in self.groups:
+			return self.groups[l]
 
 		state_l = self.state.project_level(l).copy(overlap=True)
 		state_l_edges = state_l.get_edge_blocks()
