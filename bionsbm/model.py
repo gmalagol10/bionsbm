@@ -49,11 +49,12 @@ class bionsbm(sbmtm.sbmtm):
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label=None):
+	def __init__(self, obj, label=None, max_depth=6):
 		super().__init__()
 		self.keywords = []
 		self.nbranches = 1
 		self.modalities = []
+		self.max_depth = max_depth
 
 		if isinstance(obj, mu.MuData):
 			self.modalities=list(obj.mod.keys())   
@@ -562,8 +563,9 @@ class bionsbm(sbmtm.sbmtm):
 		except Exception as e:
 			raise RuntimeError(f"Failed to save global files for model '{name}': {e}") from e
 
+
 		# --- Save levels in parallel (threaded to avoid data duplication) ---
-		L = min(len(self.state.levels), 6)
+		L = min(len(self.state.levels), self.max_depth)
 		if L == 0:
 			print("Nothing to save")
 			return  # nothing to save
