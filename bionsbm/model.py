@@ -40,7 +40,6 @@ from numba import njit
 """
 Inherit hSBM code from https://github.com/martingerlach/hSBM_Topicmodel
 """
-from . import sbmtm
 
 
 class bionsbm():
