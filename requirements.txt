@@ -2,3 +2,4 @@ muon
 scanpy
 scipy
 numba
+cloudpickle
