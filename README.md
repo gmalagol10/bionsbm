@@ -7,6 +7,8 @@
 
 conda create --name gt -c conda-forge graph-tool
 
+conda activate gt
+
 pip install git+https://github.com/gmalagol10/bionsbm
 
 ```
