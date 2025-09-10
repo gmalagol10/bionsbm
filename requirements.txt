@@ -1,7 +1,4 @@
 muon
+scanpy
 scipy
-pandas
-scikit-learn
-numpy==1.26.4
-scanpy==1.11.0
-distinctipy
+numba
