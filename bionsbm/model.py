@@ -24,14 +24,15 @@ import functools
 import os, sys
 import logging
 
-import graph_tool.all as gt
+#import graph_tool.all as gt
+from graph_tool.all import load_graph, Graph, minimize_nested_blockmodel_dl
+
 import numpy as np
 import pandas as pd
 import cloudpickle as pickle
-import scanpy as sc
-import anndata as ad
-import muon as mu
 
+from muon import MuData
+from anndata import AnnData
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
@@ -70,11 +71,11 @@ class bionsbm():
         if isinstance(obj, mu.MuData):
             self.modalities=list(obj.mod.keys())   
             dfs=[obj[key].to_df().T for key in self.modalities]
-            self.make_graph_multiple_df(dfs[0], dfs[1:])
+            self.make_graph(dfs[0], dfs[1:])
 
-        elif isinstance(obj, ad.AnnData):
+        elif isinstance(obj, AnnData):
             self.modalities=[modality]
-            self.make_graph_multiple_df(obj.to_df().T, [])
+            self.make_graph(obj.to_df().T, [])
 
         if label:
             g_raw=self.g.copy()
@@ -90,69 +91,44 @@ class bionsbm():
                 types[key]=[int(i+np.max(docs_type)+1) for a in range(0, obj[key].shape[0])]
             node_type = g_raw.new_vertex_property('int', functools.reduce(lambda a, b : a+b, list(types.values())))
             self.g = g_raw.copy()
-			del g_raw
         else:
             node_type=None
         self.node_type=node_type 
 
         
-    def save_graph(self, filename: str = "graph.xml.gz") -> None:
-        """
-        Save the graph
-
-        :param filename: name of the graph stored
-        """
-        logger.info("Saving graph to %s", filename)
-        self.g.save(filename)
-    
-    
-    def load_graph(self, filename: str = "graph.xml.gz") -> None:
-        """
-        Load a saved graph from disk and rebuild documents, words, and keywords.
-
-        Parameters
-        ----------
-        filename : str, optional
-            Path to the saved graph file (default: "graph.xml.gz").
-        """
-        logger.info("Loading graph from %s", filename)
-
-        self.g = gt.load_graph(filename)
-        self.documents = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 0]
-        self.words = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 1]
-        metadata_indexes = np.unique(self.g.vp["kind"].a)
-        metadata_indexes = metadata_indexes[metadata_indexes > 1] #no doc or words
-        self.nbranches = len(metadata_indexes)
-        for i_keyword in metadata_indexes:
-            self.keywords.append([self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
-
-
-    def make_graph_multiple_df(self, df: pd.DataFrame, df_keyword_list: List[pd.DataFrame]) -> None:
+    def make_graph(self, df: pd.DataFrame, df_keyword_list: List[pd.DataFrame]) -> None:
         """
         Create a graph from two dataframes one with words, others with keywords or other layers of information
 
         :param df: DataFrame with words on index and texts on columns
         :param df_keyword_list: list of DataFrames with keywords on index and texts on columns
         """
-        logger.info("Creating graph from multiple DataFrames")
-        df_all = df.copy(deep =True)
-        for ikey,df_keyword in enumerate(df_keyword_list):
-            df_keyword = df_keyword.reindex(columns=df.columns)
-            df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
-            df_keyword["kind"] = ikey+2
-            df_all = pd.concat((df_all,df_keyword), axis=0)
+        if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True: 
+            self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
+        else:  
+            logger.info("Creating graph from multiple DataFrames")
+            df_all = df.copy(deep =True)
+            for ikey,df_keyword in enumerate(df_keyword_list):
+                df_keyword = df_keyword.reindex(columns=df.columns)
+                df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
+                df_keyword["kind"] = ikey+2
+                df_all = pd.concat((df_all,df_keyword), axis=0)
+   
+            def get_kind(word):
+                return 1 if word in df.index else df_all.at[word,"kind"]
+   
+            self.nbranches = len(df_keyword_list)
+           
+            self.make_graph_single(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
 
-        def get_kind(word):
-            return 1 if word in df.index else df_all.at[word,"kind"]
-
-        self.nbranches = len(df_keyword_list)
-       
-        self.make_graph(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
+            folder = os.path.dirname(self.saving_path)
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            self.save_graph(filename=f"{self.saving_path}_graph.xml.gz")
 
 
-    def make_graph(self, df: pd.DataFrame, get_kind):
+    def make_graph_single(self, df: pd.DataFrame, get_kind) -> None:
         logger.info("Building graph with %d docs and %d words", df.shape[1], df.shape[0])
-        self.g = gt.Graph(directed=False)
+        self.g = Graph(directed=False)
 
         n_docs, n_words = df.shape[1], df.shape[0]
 
@@ -238,7 +214,7 @@ class bionsbm():
 
         for i in range(n_init):
             logger.info("Fit number: %d", i)
-            state = gt.minimize_nested_blockmodel_dl(self.g, state_args=state_args, multilevel_mcmc_args=multilevel_mcmc_args, *args, **kwargs)
+            state = minimize_nested_blockmodel_dl(self.g, state_args=state_args, multilevel_mcmc_args=multilevel_mcmc_args, *args, **kwargs)
             
             entropy = state.entropy()
             if entropy < min_entropy:
@@ -252,194 +228,78 @@ class bionsbm():
 
         self.groups = {}
         logger.info("Saving data in %s", self.saving_path)
-        self.save_data(saving_path=self.saving_path)
+        self.save_data(path_to_save=self.saving_path)
 
         logger.info("Annotate object")
         self.annotate_obj()
 
 
-    def save_single_level(self, l: int, saving_path: str) -> None:
-        """
-        Save per-level probability matrices (topics, clusters, documents) for the given level.
-
-        Parameters
-        ----------
-        l : int
-            The level index to save. Must be within the range of available model levels.
-        saving_path : str
-            Base path (folder + prefix) where files will be written.
-            Example: "results/mymodel" → files like:
-                - results/mymodel_level_0_mainfeature_topics.tsv.gz
-                - results/mymodel_level_0_clusters.tsv.gz
-                - results/mymodel_level_0_mainfeature_topics_documents.tsv.gz
-                - results/mymodel_level_0_metafeature_topics.tsv.gz
-                - results/mymodel_level_0_metafeature_topics_documents.tsv.gz
-
-        Notes
-        -----
-        - Files are written as tab-separated values (`.tsv.gz`) with gzip compression.
-        - Handles both the main feature (`self.modalities[0]`) and any meta-features (`self.modalities[1:]`).
-        - Raises RuntimeError if any file cannot be written.
-        """
-
-        # --- Validate inputs ---
-        if not isinstance(l, int) or l < 0 or l >= len(self.state.levels) or l >= len(self.state.levels):
-            raise ValueError(f"Invalid level index {l}. Must be between 0 and {len(self.state.levels) - 1}.")
-        if not isinstance(saving_path, str) or not saving_path.strip():
-            raise ValueError("`saving_path` must be a non-empty string path prefix.")
-
-        main_feature = self.modalities[0]
-
-        try:
-            data = self.get_groups(l)
-        except Exception as e:
-            raise RuntimeError(f"Failed to get group data for level {l}: {e}") from e
-
-        # Helper to safely save a DataFrame
-        def _safe_save(df, filepath):
-            try:
-                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-                df.to_csv(filepath, compression="gzip", sep="\t")
-            except Exception as e:
-                raise RuntimeError(f"Failed to save {filepath}: {e}") from e
-
-        # --- P(document | cluster) ---
-        clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
-        _safe_save(clusters, f"{saving_path}_level_{l}_clusters.tsv.gz")
-
-
-        # --- P(main_feature | main_topic) ---
-        p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
-            columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-        _safe_save(p_w_tw, f"{saving_path}_level_{l}_{main_feature}_topics.tsv.gz")
-
-        # --- P(main_topic | documents) ---
-        p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
-            columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-        _safe_save(p_tw_d, f"{saving_path}_level_{l}_{main_feature}_topics_documents.tsv.gz")
-
-        # --- P(meta_feature | meta_topic_feature), if any ---
-        if len(self.modalities) > 1:
-            for k, meta_features in enumerate(self.modalities[1:]):
-                p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
-                    columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-                _safe_save(p_w_tw, f"{saving_path}_level_{l}_{meta_features}_topics.tsv.gz")
-
-
-            # --- P(meta_topic | document) ---
-            for k, meta_features in enumerate(self.modalities[1:]):
-                p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
-                    columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-                _safe_save(p_tw_d, f"{saving_path}_level_{l}_{meta_features}_topics_documents.tsv.gz")
-
-
-
-    def save_data(self, saving_path: str = "results/mymodel") -> None:
-        """
-        Save the global graph, model, state, and level-specific data for the current nSBM self.
-
-        Parameters
-        ----------
-        saving_path : str, optional
-            Base path (folder + prefix) where all outputs will be saved.
-            Example: "results/mymodel" will produce:
-                - results/mymodel_graph.xml.gz
-                - results/mymodel_self.pkl    
-                - results/mymodel_entropy.txt
-                - results/mymodel_state.pkl
-                - results/mymodel_level_X_*.tsv.gz  (per level, up to 6 levels)
-
-        Notes
-        -----
-        - The parent folder is created automatically if it does not exist.
-        - Level saving is parallelized with threads for efficiency in I/O.
-        - By default, at most 6 levels are saved, or fewer if the model has <6 levels.
-        - Exceptions in parallel tasks are caught and reported without stopping other tasks.
-        """
-        logger.info("Saving model data to %s", saving_path)
-
-        L = min(len(self.state.levels), self.max_depth)
-        self.L = L
-        if L == 0:
-            logger.warning("Nothing to save (no levels found)")
-            return
-        
-        folder = os.path.dirname(saving_path)
-        if folder:
-            Path(folder).mkdir(parents=True, exist_ok=True)
-
-        try:
-            self.save_graph(filename=f"{saving_path}_graph.xml.gz")
-            self.dump_model(filename=f"{saving_path}_self.pkl")
-
-            with open(f"{saving_path}_entropy.txt", "w") as f:
-                f.write(str(self.state.entropy()))
-
-            with open(f"{saving_path}_state.pkl", "wb") as f:
-                pickle.dump(self.state, f)
-
-        except Exception as e:
-            logger.error("Failed to save global files: %s", e)
-            raise RuntimeError(f"Failed to save global files for model '{saving_path}': {e}") from e
-
-
-        errors = []
-        with ThreadPoolExecutor() as executor:
-            futures = {executor.submit(self.save_single_level, l, saving_path): l for l in range(L)}
-            for future in as_completed(futures):
-                l = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    errors.append((l, str(e)))
-
-        if errors:
-            msg = "; ".join([f"Level {l}: {err}" for l, err in errors])
-            logger.error("Errors occurred while saving levels: %s", msg)
-            raise RuntimeError(f"Errors occurred while saving levels: {msg}")
-
-
-    def annotate_obj(self) -> None:
-        L = min(len(self.state.levels), self.max_depth)
-        for l in range(0,L):
-            main_feature = self.modalities[0]
-            data = self.get_groups(l)
-            self.obj.obs[f"Level_{l}_cluster"]=np.argmax(pd.DataFrame(data=data["p_td_d"], columns=self.documents)[self.obj.obs.index], axis=0).astype(str)
-            
-    
-            if isinstance(self.obj, mu.MuData):
-                order_var=self.obj[main_feature].var.index
-                p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
-                                columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[order_var]
-                self.obj[main_feature].var[f"Level_{l}_{main_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
-
-            elif isinstance(self.obj, ad.AnnData):
-                order_var=self.obj.var.index             
-                p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
-                                columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[order_var]
-                self.obj.var[f"Level_{l}_{main_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
-
-            
-            p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
-                    columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[self.obj.obs.index]
-            p_tw_d=p_tw_d-p_tw_d.mean(axis=0)
-            self.obj.obs[f"Level_{l}_{main_feature}"]=np.argmax(p_tw_d, axis=1).astype(str)
-        
-            if len(self.modalities) > 1:
-                for k, meta_feature in enumerate(self.modalities[1:]):
-                    p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
-                        columns=[f"{meta_feature}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-                    self.obj[meta_feature].var[f"Level_{l}_{meta_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
-            
-                # --- P(meta_topic | document) ---
-                for k, meta_feature in enumerate(self.modalities[1:]):
-                    p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
-                        columns=[f"{meta_feature}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-                    p_tw_d=p_tw_d-p_tw_d.mean(axis=0)
-                    self.obj.obs[f"Level_{l}_{meta_feature}"]=np.argmax(p_tw_d, axis=1).astype(str)
-
-
     # Helper functions
+    def save_graph(self, filename: str = "graph.xml.gz") -> None:
+        """
+        Save the graph
+
+        :param filename: name of the graph stored
+        """
+        logger.info("Saving graph to %s", filename)
+        self.g.save(filename)
+    
+    
+    def load_graph(self, filename: str = "graph.xml.gz") -> None:
+        """
+        Load a saved graph from disk and rebuild documents, words, and keywords.
+
+        Parameters
+        ----------
+        filename : str, optional
+            Path to the saved graph file (default: "graph.xml.gz").
+        """
+        logger.info("Loading graph from %s", filename)
+
+        self.g = load_graph(filename)
+        self.documents = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 0]
+        self.words = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 1]
+        metadata_indexes = np.unique(self.g.vp["kind"].a)
+        metadata_indexes = metadata_indexes[metadata_indexes > 1] #no doc or words
+        self.nbranches = len(metadata_indexes)
+        for i_keyword in metadata_indexes:
+            self.keywords.append([self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
+
+    
+    def dump_model(self, filename="bionsbm.pkl"):
+        """
+        Dump model using pickle
+
+        """
+        logger.info("Dumping model to %s", filename)
+
+        with open(filename, 'wb') as f:
+            pickle.dump(self, f)
+
+    def load_model(self, filename="bionsbm.pkl"):
+        logger.info("Loading model from %s", filename)
+
+        with open(filename, "rb") as f:
+            model = pickle.load(f)
+        return model
+
+
+    def get_mdl(self):
+        """
+        Get minimum description length
+
+        Proxy to self.state.entropy()
+        """
+        return self.mdl
+            
+    def _get_shape(self):
+        """
+        :return: list of tuples (number of documents, number of words, (number of keywords,...))
+        """
+        D = int(np.sum(self.g.vp['kind'].a == 0)) #documents
+        W = int(np.sum(self.g.vp['kind'].a == 1)) #words
+        K = [int(np.sum(self.g.vp['kind'].a == (k+2))) for k in range(self.nbranches)] #keywords
+        return D, W, K
 
     def get_groups(self, l=0) -> None:
 
@@ -639,58 +499,6 @@ class bionsbm():
         self.groups[l] = result
         return result
 
-    def dump_model(self, filename="bionsbm.pkl"):
-        """
-        Dump model using pickle
-
-        """
-        logger.info("Dumping model to %s", filename)
-
-        with open(filename, 'wb') as f:
-            pickle.dump(self, f)
-
-    def load_model(self, filename="bionsbm.pkl"):
-        logger.info("Loading model from %s", filename)
-
-        with open(filename, "rb") as f:
-            model = pickle.load(f)
-        return model
-
-
-    def get_mdl(self):
-        """
-        Get minimum description length
-
-        Proxy to self.state.entropy()
-        """
-        return self.mdl
-            
-    def _get_shape(self):
-        """
-        :return: list of tuples (number of documents, number of words, (number of keywords,...))
-        """
-        D = int(np.sum(self.g.vp['kind'].a == 0)) #documents
-        W = int(np.sum(self.g.vp['kind'].a == 1)) #words
-        K = [int(np.sum(self.g.vp['kind'].a == (k+2))) for k in range(self.nbranches)] #keywords
-        return D, W, K
-    def get_V(self):
-        '''
-        return number of word-nodes == types
-        '''
-        return int(np.sum(self.g.vp['kind'].a == 1))  # no. of types
-
-    def get_D(self):
-        '''
-        return number of doc-nodes == number of documents
-        '''
-        return int(np.sum(self.g.vp['kind'].a == 0))  # no. of types
-
-    def get_N(self):
-        '''
-        return number of edges == tokens
-        '''
-        return int(self.g.num_edges())  # no. of types
-
 
     def draw(self, *args, **kwargs) -> None:
         """
@@ -724,3 +532,201 @@ class bionsbm():
             edge_pen_width = self.g.ep["count"],
             vertex_color=colmap,
             vertex_fill_color=colmap, *args, **kwargs)
+
+
+    def save_single_level(self, l: int, path_to_save: str) -> None:
+        """
+        Save per-level probability matrices (topics, clusters, documents) for the given level.
+
+        Parameters
+        ----------
+        l : int
+            The level index to save. Must be within the range of available model levels.
+        savingpath_to_save_path : str
+            Base path (folder + prefix) where files will be written.
+            Example: "results/mymodel" → files like:
+                - results/mymodel_level_0_mainfeature_topics.tsv.gz
+                - results/mymodel_level_0_clusters.tsv.gz
+                - results/mymodel_level_0_mainfeature_topics_documents.tsv.gz
+                - results/mymodel_level_0_metafeature_topics.tsv.gz
+                - results/mymodel_level_0_metafeature_topics_documents.tsv.gz
+
+        Notes
+        -----
+        - Files are written as tab-separated values (`.tsv.gz`) with gzip compression.
+        - Handles both the main feature (`self.modalities[0]`) and any meta-features (`self.modalities[1:]`).
+        - Raises RuntimeError if any file cannot be written.
+        """
+
+        # --- Validate inputs ---
+        if not isinstance(l, int) or l < 0 or l >= len(self.state.levels) or l >= len(self.state.levels):
+            raise ValueError(f"Invalid level index {l}. Must be between 0 and {len(self.state.levels) - 1}.")
+        if not isinstance(path_to_save, str) or not path_to_save.strip():
+            raise ValueError("`path_to_save` must be a non-empty string path prefix.")
+
+        main_feature = self.modalities[0]
+
+        try:
+            data = self.get_groups(l)
+        except Exception as e:
+            raise RuntimeError(f"Failed to get group data for level {l}: {e}") from e
+
+        # Helper to safely save a DataFrame
+        def _safe_save(df, filepath):
+            try:
+                Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+                df.to_csv(filepath, compression="gzip", sep="\t")
+            except Exception as e:
+                raise RuntimeError(f"Failed to save {filepath}: {e}") from e
+
+        # --- P(document | cluster) ---
+        clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
+        _safe_save(clusters, f"{path_to_save}_level_{l}_clusters.tsv.gz")
+
+
+        # --- P(main_feature | main_topic) ---
+        p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
+            columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
+        _safe_save(p_w_tw, f"{path_to_save}_level_{l}_{main_feature}_topics.tsv.gz")
+
+        # --- P(main_topic | documents) ---
+        p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
+            columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
+        _safe_save(p_tw_d, f"{path_to_save}_level_{l}_{main_feature}_topics_documents.tsv.gz")
+
+        # --- P(meta_feature | meta_topic_feature), if any ---
+        if len(self.modalities) > 1:
+            for k, meta_features in enumerate(self.modalities[1:]):
+                p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
+                    columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+                _safe_save(p_w_tw, f"{path_to_save}_level_{l}_{meta_features}_topics.tsv.gz")
+
+
+            # --- P(meta_topic | document) ---
+            for k, meta_features in enumerate(self.modalities[1:]):
+                p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
+                    columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+                _safe_save(p_tw_d, f"{path_to_save}_level_{l}_{meta_features}_topics_documents.tsv.gz")
+
+
+
+    def save_data(self, path_to_save: str = "results/mymodel") -> None:
+        """
+        Save the global graph, model, state, and level-specific data for the current nSBM self.
+
+        Parameters
+        ----------
+        savinpath_to_saveg_path : str, optional
+            Base path (folder + prefix) where all outputs will be saved.
+            Example: "results/mymodel" will produce:
+                - results/mymodel_graph.xml.gz
+                - results/mymodel_model.pkl    
+                - results/mymodel_entropy.txt
+                - results/mymodel_state.pkl
+                - results/mymodel_level_X_*.tsv.gz  (per level, up to 6 levels)
+
+        Notes
+        -----
+        - The parent folder is created automatically if it does not exist.
+        - Level saving is parallelized with threads for efficiency in I/O.
+        - By default, at most 6 levels are saved, or fewer if the model has <6 levels.
+        - Exceptions in parallel tasks are caught and reported without stopping other tasks.
+        """
+        logger.info("Saving model data to %s", path_to_save)
+
+        L = min(len(self.state.levels), self.max_depth)
+        self.L = L
+        if L == 0:
+            logger.warning("Nothing to save (no levels found)")
+            return
+        
+        folder = os.path.dirname(path_to_save)
+        Path(folder).mkdir(parents=True, exist_ok=True)
+
+        try:
+            self.save_graph(filename=f"{path_to_save}_graph.xml.gz")
+            self.dump_model(filename=f"{path_to_save}_model.pkl")
+
+            with open(f"{path_to_save}_entropy.txt", "w") as f:
+                f.write(str(self.state.entropy()))
+
+            with open(f"{path_to_save}_state.pkl", "wb") as f:
+                pickle.dump(self.state, f)
+
+        except Exception as e:
+            logger.error("Failed to save global files: %s", e)
+            raise RuntimeError(f"Failed to save global files for model '{path_to_save}': {e}") from e
+
+
+        errors = []
+        with ThreadPoolExecutor() as executor:
+            futures = {executor.submit(self.save_single_level, l, path_to_save): l for l in range(L)}
+            for future in as_completed(futures):
+                l = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    errors.append((l, str(e)))
+
+        if errors:
+            msg = "; ".join([f"Level {l}: {err}" for l, err in errors])
+            logger.error("Errors occurred while saving levels: %s", msg)
+            raise RuntimeError(f"Errors occurred while saving levels: {msg}")
+
+
+    def annotate_obj(self) -> None:
+        L = min(len(self.state.levels), self.max_depth)
+        for l in range(0,L):
+            main_feature = self.modalities[0]
+            data = self.get_groups(l)
+            self.obj.obs[f"Level_{l}_cluster"]=np.argmax(pd.DataFrame(data=data["p_td_d"], columns=self.documents)[self.obj.obs.index], axis=0).astype(str)
+            
+    
+            if isinstance(self.obj, mu.MuData):
+                order_var=self.obj[main_feature].var.index
+                p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
+                                columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[order_var]
+                self.obj[main_feature].var[f"Level_{l}_{main_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
+
+            elif isinstance(self.obj, AnnData):
+                order_var=self.obj.var.index             
+                p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
+                                columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[order_var]
+                self.obj.var[f"Level_{l}_{main_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
+
+            
+            p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
+                    columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[self.obj.obs.index]
+            p_tw_d=p_tw_d-p_tw_d.mean(axis=0)
+            self.obj.obs[f"Level_{l}_{main_feature}"]=np.argmax(p_tw_d, axis=1).astype(str)
+        
+            if len(self.modalities) > 1:
+                for k, meta_feature in enumerate(self.modalities[1:]):
+                    p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
+                        columns=[f"{meta_feature}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+                    self.obj[meta_feature].var[f"Level_{l}_{meta_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
+            
+                # --- P(meta_topic | document) ---
+                for k, meta_feature in enumerate(self.modalities[1:]):
+                    p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
+                        columns=[f"{meta_feature}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+                    p_tw_d=p_tw_d-p_tw_d.mean(axis=0)
+                    self.obj.obs[f"Level_{l}_{meta_feature}"]=np.argmax(p_tw_d, axis=1).astype(str)
+
+    def get_V(self):
+        '''
+        return number of word-nodes == types
+        '''
+        return int(np.sum(self.g.vp['kind'].a == 1))  # no. of types
+
+    def get_D(self):
+        '''
+        return number of doc-nodes == number of documents
+        '''
+        return int(np.sum(self.g.vp['kind'].a == 0))  # no. of types
+
+    def get_N(self):
+        '''
+        return number of edges == tokens
+        '''
+        return int(self.g.num_edges())  # no. of types
