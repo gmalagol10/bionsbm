@@ -96,7 +96,7 @@ class bionsbm():
         self.obj: Any = obj
         self.saving_path: str = saving_path
 
-        if isinstance(obj, mu.MuData):
+        if isinstance(obj, MuData):
             self.modalities=list(obj.mod.keys())   
             dfs=[obj[key].to_df().T for key in self.modalities]
             self.make_graph(dfs[0], dfs[1:])
@@ -795,7 +795,7 @@ class bionsbm():
             self.obj.obs[f"Level_{l}_cluster"]=np.argmax(pd.DataFrame(data=data["p_td_d"], columns=self.documents)[self.obj.obs.index], axis=0).astype(str)
             
     
-            if isinstance(self.obj, mu.MuData):
+            if isinstance(self.obj, MuData):
                 order_var=self.obj[main_feature].var.index
                 p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
                                 columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[order_var]
