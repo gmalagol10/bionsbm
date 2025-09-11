@@ -24,7 +24,6 @@ import functools
 import os, sys
 import logging
 
-#import graph_tool.all as gt
 from graph_tool.all import load_graph, Graph, minimize_nested_blockmodel_dl
 
 import numpy as np
