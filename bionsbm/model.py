@@ -46,13 +46,14 @@ class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label=None, max_depth=6, modality="Mod1"):
+	def __init__(self, obj, label=None, max_depth=6, modality="Mod1", saving_path="results/mymodel"):
 		super().__init__()
 		self.keywords = []
 		self.nbranches = 1
 		self.modalities = []
 		self.max_depth = max_depth
 		self.obj = obj
+		self.saving_path = saving_path
 
 		if isinstance(obj, mu.MuData):
 			self.modalities=list(obj.mod.keys())   
@@ -183,7 +184,7 @@ class bionsbm():
 			self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
 
 
-	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, name = "results/mymodel", *args, **kwargs) -> None:
+	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
 		"""
 		Fit using minimize_nested_blockmodel_dl
 		
@@ -230,7 +231,7 @@ class bionsbm():
 		L = len(self.state.levels)
 		self.L = L
 		self.groups = {}
-		self.save_data(name=name)
+		self.save_data(saving_path=self.saving_path)
 
 
 	# Helper functions
@@ -498,7 +499,7 @@ class bionsbm():
 			vertex_fill_color=colmap, *args, **kwargs)
 
 
-	def save_single_level(self, l: int, name: str) -> None:
+	def save_single_level(self, l: int, saving_path: str) -> None:
 		"""
 		Save per-level probability matrices (topics, clusters, documents) for the given level.
 
@@ -506,7 +507,7 @@ class bionsbm():
 		----------
 		l : int
 			The level index to save. Must be within the range of available model levels.
-		name : str
+		saving_path : str
 			Base path (folder + prefix) where files will be written.
 			Example: "results/mymodel" → files like:
 				- results/mymodel_level_0_mainfeature_topics.tsv.gz
@@ -525,8 +526,8 @@ class bionsbm():
 		# --- Validate inputs ---
 		if not isinstance(l, int) or l < 0 or l >= len(self.state.levels):
 			raise ValueError(f"Invalid level index {l}. Must be between 0 and {len(self.state.levels) - 1}.")
-		if not isinstance(name, str) or not name.strip():
-			raise ValueError("`name` must be a non-empty string path prefix.")
+		if not isinstance(saving_path, str) or not saving_path.strip():
+			raise ValueError("`saving_path` must be a non-empty string path prefix.")
 
 		main_feature = self.modalities[0]
 
@@ -545,42 +546,42 @@ class bionsbm():
 
 		# --- P(document | cluster) ---
 		clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
-		_safe_save(clusters, f"{name}_level_{l}_clusters.tsv.gz")
+		_safe_save(clusters, f"{saving_path}_level_{l}_clusters.tsv.gz")
 
 
 		# --- P(main_feature | main_topic) ---
 		p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-		_safe_save(p_w_tw, f"{name}_level_{l}_{main_feature}_topics.tsv.gz")
+		_safe_save(p_w_tw, f"{saving_path}_level_{l}_{main_feature}_topics.tsv.gz")
 
 		# --- P(main_topic | documents) ---
 		p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-		_safe_save(p_tw_d, f"{name}_level_{l}_{main_feature}_topics_documents.tsv.gz")
+		_safe_save(p_tw_d, f"{saving_path}_level_{l}_{main_feature}_topics_documents.tsv.gz")
 
 		# --- P(meta_feature | meta_topic_feature), if any ---
 		if len(self.modalities) > 1:
 			for k, meta_features in enumerate(self.modalities[1:]):
 				p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
 					columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				_safe_save(p_w_tw, f"{name}_level_{l}_{meta_features}_topics.tsv.gz")
+				_safe_save(p_w_tw, f"{saving_path}_level_{l}_{meta_features}_topics.tsv.gz")
 
 
 			# --- P(meta_topic | document) ---
 			for k, meta_features in enumerate(self.modalities[1:]):
 				p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
 					columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				_safe_save(p_tw_d, f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz")
+				_safe_save(p_tw_d, f"{saving_path}_level_{l}_{meta_features}_topics_documents.tsv.gz")
 
 
 
-	def save_data(self, name: str = "results/mymodel") -> None:
+	def save_data(self, saving_path: str = "results/mymodel") -> None:
 		"""
 		Save the global graph, model, state, and level-specific data for the current nSBM self.
 
 		Parameters
 		----------
-		name : str, optional
+		saving_path : str, optional
 			Base path (folder + prefix) where all outputs will be saved.
 			Example: "results/mymodel" will produce:
 				- results/mymodel_graph.xml.gz
@@ -598,27 +599,27 @@ class bionsbm():
 		"""
 
 		# --- Validate name ---
-		if not isinstance(name, str) or not name.strip():
+		if not isinstance(saving_path, str) or not saving_path.strip():
 			raise ValueError("`name` must be a non-empty string representing the save path.")
 
 		# --- Ensure folder exists ---
-		folder = os.path.dirname(name)
+		folder = os.path.dirname(saving_path)
 		if folder:
 			Path(folder).mkdir(parents=True, exist_ok=True)
 
 		# --- Save global files ---
 		try:
-			self.save_graph(filename=f"{name}_graph.xml.gz")
-			self.dump_model(filename=f"{name}_self.pkl")
+			self.save_graph(filename=f"{saving_path}_graph.xml.gz")
+			self.dump_model(filename=f"{saving_path}_self.pkl")
 
-			with open(f"{name}_entropy.txt", "w") as f:
+			with open(f"{saving_path}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
 
-			with open(f"{name}_state.pkl", "wb") as f:
+			with open(f"{saving_path}_state.pkl", "wb") as f:
 				pickle.dump(self.state, f)
 
 		except Exception as e:
-			raise RuntimeError(f"Failed to save global files for model '{name}': {e}") from e
+			raise RuntimeError(f"Failed to save global files for model '{saving_path}': {e}") from e
 
 
 		# --- Save levels in parallel (threaded to avoid data duplication) ---
@@ -629,7 +630,7 @@ class bionsbm():
 
 		errors = []
 		with ThreadPoolExecutor() as executor:
-			futures = {executor.submit(self.save_single_level, l, name): l for l in range(L)}
+			futures = {executor.submit(self.save_single_level, l, saving_path): l for l in range(L)}
 			for future in as_completed(futures):
 				l = futures[future]
 				try:
