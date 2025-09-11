@@ -183,7 +183,7 @@ class bionsbm():
 			self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
 
 
-	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
+	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, name = "results/mymodel", *args, **kwargs) -> None:
 		"""
 		Fit using minimize_nested_blockmodel_dl
 		
@@ -230,6 +230,7 @@ class bionsbm():
 		L = len(self.state.levels)
 		self.L = L
 		self.groups = {}
+		self.save_data(name=name)
 
 
 	# Helper functions
