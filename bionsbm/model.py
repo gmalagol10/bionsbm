@@ -60,6 +60,34 @@ class bionsbm():
     Class to run bionsbm
     """
     def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/mymodel"):
+        """
+        Initialize a bionsbm model.
+
+        This constructor sets up the graph representation of the input data
+        (`AnnData` or `MuData`) and optionally assigns node types based on a label.
+
+        Parameters
+        ----------
+        obj : muon.MuData or anndata.AnnData
+            Input data object. If `MuData`, all modalities are extracted; if `AnnData`,
+            only the provided `modality` is used.
+        label : str, optional
+            Column in `.obs` used to assign document labels and node types.
+            If provided, the graph is annotated accordingly.
+        max_depth : int, default=6
+            Maximum number of levels to save or annotate in the hierarchical model.
+        modality : str, default="Mod1"
+            Name of the modality to use when the input is `AnnData`.
+        saving_path : str, default="results/mymodel"
+            Base path for saving model outputs (graph, state, results).
+
+        Notes
+        -----
+        - For `MuData`, multiple modalities are combined into a multi-branch graph.
+        - If `label` is provided, a mapping is created to encode document/node types.
+        - `self.g` (graph) and related attributes (`documents`, `words`, `keywords`)
+          are initialized by calling `self.make_graph(...)`.
+        """
         super().__init__()
         self.keywords: List = []
         self.nbranches: int = 1
@@ -98,10 +126,38 @@ class bionsbm():
         
     def make_graph(self, df: pd.DataFrame, df_keyword_list: List[pd.DataFrame]) -> None:
         """
-        Create a graph from two dataframes one with words, others with keywords or other layers of information
+        Build a heterogeneous graph from a main feature DataFrame and optional keyword/meta-feature DataFrames.
 
-        :param df: DataFrame with words on index and texts on columns
-        :param df_keyword_list: list of DataFrames with keywords on index and texts on columns
+        This function constructs a bipartite (documents–words) or multi-branch
+        graph (documents–words–keywords/meta-features) using the input matrices.
+        If a cached graph file exists at ``self.saving_path``, it is loaded directly
+        instead of rebuilding.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Main feature matrix with words/features as rows (index) and
+            documents/samples as columns.
+        df_keyword_list : list of pandas.DataFrame
+            List of additional matrices (e.g., keywords, annotations, or meta-features).
+            Each DataFrame must have the same columns as ``df`` (documents),
+            and its rows will be treated as a separate feature branch.
+
+        Notes
+        -----
+        - Each branch is assigned a unique ``kind`` index:
+          * 0 → documents
+          * 1 → main features (e.g., words/genes)
+          * 2, 3, ... → subsequent keyword/meta-feature branches
+        - If a saved graph already exists at
+          ``{self.saving_path}_graph.xml.gz``, it will be loaded instead of recreated.
+        - After graph construction, the graph is saved to disk in Graph-Tool format.
+
+        Raises
+        ------
+        ValueError
+            If ``df`` and ``df_keyword_list`` cannot be aligned properly
+            (e.g., inconsistent columns).
         """
         if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True: 
             self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
@@ -127,6 +183,45 @@ class bionsbm():
 
 
     def make_graph_single(self, df: pd.DataFrame, get_kind) -> None:
+
+        """
+        Construct a graph-tool graph from a single feature matrix.
+
+        This method builds a bipartite or multi-branch graph from the given
+        DataFrame, where columns represent documents/samples and rows represent
+        features (e.g., words, genes, or keywords). Vertices are created for
+        both documents and features, and weighted edges connect documents to
+        their features.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Feature matrix with rows as features (words, genes, or keywords)
+            and columns as documents/samples. The values must be numeric and
+            represent counts or weights of feature occurrences.
+        get_kind : callable
+            Function that takes a feature name (row index from ``df``) and
+            returns an integer specifying the vertex kind:
+            - 0 → document nodes
+            - 1 → main feature nodes
+            - 2, 3, ... → keyword/meta-feature branch nodes
+
+        Notes
+        -----
+        - The constructed graph is undirected.
+        - Vertices are annotated with two properties:
+          * ``name`` (string): document or feature name.
+          * ``kind`` (int): node type (document, word, or keyword branch).
+        - Edges are annotated with ``count`` (int), representing the weight.
+        - Edges with zero weight are removed after construction.
+        - The graph is stored in ``self.g``
+
+        Raises
+        ------
+        ValueError
+            If the resulting graph has no edges (i.e., ``df`` is empty or contains only zeros).    
+        """
+        
         logger.info("Building graph with %d docs and %d words", df.shape[1], df.shape[0])
         self.g = Graph(directed=False)
 
@@ -181,15 +276,35 @@ class bionsbm():
 
     def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
         """
-        Fit using minimize_nested_blockmodel_dl
-        
-        :param n_init: number of initialisation. The best will be kept
-        :param verbose: Print output
-        :param deg_corr: use deg corrected model
-        :param overlap: use overlapping model
-        :param parallel: perform parallel moves
-        :param  \*args: positional arguments to pass to gt.minimize_nested_blockmodel_dl
-        :param  \*\*kwargs: keywords arguments to pass to gt.minimize_nested_blockmodel_dl
+        Fit a nested stochastic block model to the graph using `minimize_nested_blockmodel_dl`.
+    
+        This method performs multiple initializations and keeps the best model 
+        based on the minimum description length (entropy). It supports degree-corrected 
+        and overlapping block models, and can perform parallel moves for efficiency.
+    
+        Parameters
+        ----------
+        n_init : int, default=1
+            Number of random initializations. The model with the lowest entropy is retained.
+        verbose : bool, default=True
+            If True, print progress messages.
+        deg_corr : bool, default=True
+            If True, use a degree-corrected block model.
+        overlap : bool, default=False
+            If True, use an overlapping block model.
+        parallel : bool, default=False
+            If True, perform parallel moves during optimization.
+        B_min : int, default=0
+            Minimum number of blocks to consider.
+        B_max : int, optional
+            Maximum number of blocks to consider. Defaults to the number of vertices.
+        clabel : str or property map, optional
+            Vertex property to use as initial block assignment. If None, the 'kind' 
+            vertex property is used.
+        *args : positional arguments
+            Additional positional arguments passed to `minimize_nested_blockmodel_dl`.
+        **kwargs : keyword arguments
+            Additional keyword arguments passed to `minimize_nested_blockmodel_dl`. 
         """
         if clabel == None:
             clabel = self.g.vp['kind']
@@ -554,7 +669,6 @@ class bionsbm():
         Notes
         -----
         - Files are written as tab-separated values (`.tsv.gz`) with gzip compression.
-        - Handles both the main feature (`self.modalities[0]`) and any meta-features (`self.modalities[1:]`).
         - Raises RuntimeError if any file cannot be written.
         """
 
@@ -629,8 +743,7 @@ class bionsbm():
         -----
         - The parent folder is created automatically if it does not exist.
         - Level saving is parallelized with threads for efficiency in I/O.
-        - By default, at most 6 levels are saved, or fewer if the model has <6 levels.
-        - Exceptions in parallel tasks are caught and reported without stopping other tasks.
+        - By default, at most self.max_depth levels are saved, or fewer if the model has <self.max_depth levels.
         """
         logger.info("Saving model data to %s", path_to_save)
 
