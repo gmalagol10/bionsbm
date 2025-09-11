@@ -318,8 +318,8 @@ class bionsbm():
 					# unexpected kind (<1): ignore for safety (original assumed only kind==1 or >=2)
 					pass
 			
-		if l in model.groups.keys():
-			return model.groups[l]
+		if l in self.groups.keys():
+			return self.groups[l]
 
 		state_l = self.state.project_level(l).copy(overlap=True)
 		state_l_edges = state_l.get_edge_blocks()
@@ -560,16 +560,16 @@ class bionsbm():
 		# --- P(meta_feature | meta_topic_feature), if any ---
 		if len(self.modalities) > 1:
 			for k, meta_features in enumerate(self.modalities[1:]):
-				feat_topic = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
+				p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
 					columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				_safe_save(feat_topic, f"{name}_level_{l}_{meta_features}_topics.tsv.gz")
+				_safe_save(p_w_tw, f"{name}_level_{l}_{meta_features}_topics.tsv.gz")
 
 
 			# --- P(meta_topic | document) ---
 			for k, meta_features in enumerate(self.modalities[1:]):
-				p_tk_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
+				p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
 					columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				_safe_save(p_tk_d, f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz")
+				_safe_save(p_tw_d, f"{name}_level_{l}_{meta_features}_topics_documents.tsv.gz")
 
 
 
@@ -608,7 +608,7 @@ class bionsbm():
 		# --- Save global files ---
 		try:
 			self.save_graph(filename=f"{name}_graph.xml.gz")
-			self.dump_model(filename=f"{name}_model.pkl")
+			self.dump_model(filename=f"{name}_self.pkl")
 
 			with open(f"{name}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
@@ -640,6 +640,34 @@ class bionsbm():
 			msg = "; ".join([f"Level {l}: {err}" for l, err in errors])
 			raise RuntimeError(f"Errors occurred while saving levels: {msg}")
 
+	def annotate_obj(self) -> None:
+		L = min(len(self.state.levels), self.max_depth)
+		for l in range(0,L):
+			main_feature = self.modalities[0]
+			data = self.get_groups(l)
+			mdata.obs[f"Level_{l}_cluster"]=np.argmax(pd.DataFrame(data=data["p_td_d"], columns=self.documents)[mdata.obs.index], axis=0).astype(str)
+		
+			p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
+					columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[mdata[main_feature].var.index]
+			mdata[main_feature].var[f"Level_{l}_{main_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
+			
+			p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
+					columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])]).loc[mdata.obs.index]
+			p_tw_d=p_tw_d-p_tw_d.mean(axis=0)
+			mdata.obs[f"Level_{l}_{main_feature}"]=np.argmax(p_tw_d, axis=1).astype(str)
+		
+			if len(self.modalities) > 1:
+				for k, meta_feature in enumerate(self.modalities[1:]):
+					p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
+						columns=[f"{meta_feature}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+					mdata[meta_feature].var[f"Level_{l}_{meta_feature}_topic"]=np.argmax(p_w_tw, axis=1).astype(str)
+			
+				# --- P(meta_topic | document) ---
+				for k, meta_feature in enumerate(self.modalities[1:]):
+					p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
+						columns=[f"{meta_feature}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
+					p_tw_d=p_tw_d-p_tw_d.mean(axis=0)
+					mdata.obs[f"Level_{l}_{meta_feature}"]=np.argmax(p_tw_d, axis=1).astype(str)
 
 	def get_V(self):
 		'''
