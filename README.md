@@ -17,13 +17,13 @@ pip install git+https://github.com/gmalagol10/bionsbm
 
 ```python
 import bionsbm
-import muon as mu
+from muon import read_h5mu
 
-mdata=mu.read_h5mu("Test_data.h5mu")
+mdata = mu.read_h5mu("Test_data.h5mu")
 
-model = bionsbm.model.bionsbm(mdata)
+model = bionsbm.model.bionsbm(obj=mdata, saving_path="results/mybionsbm")
 
-model.fit()
+model.fit(n_init=1, verbose=False)
 
 
 ```
