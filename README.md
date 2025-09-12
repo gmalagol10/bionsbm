@@ -1,5 +1,5 @@
 # bionsbm
-### Graph-based topic modelling for single-cell multi-omica data
+### Graph-based topic modelling for the integration single-cell multi-omica data
 
 ## Installation
 
@@ -24,8 +24,6 @@ mdata=mu.read_h5mu("Test_data.h5mu")
 model = bionsbm.model.bionsbm(mdata)
 
 model.fit()
-
-model.save_data("MyModel/mymodel")
 
 
 ```
