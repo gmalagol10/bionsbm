@@ -19,7 +19,7 @@ pip install git+https://github.com/gmalagol10/bionsbm
 import bionsbm
 from muon import read_h5mu
 
-mdata = mu.read_h5mu("Test_data.h5mu")
+mdata = read_h5mu("Test_data.h5mu")
 
 model = bionsbm.model.bionsbm(obj=mdata, saving_path="results/mybionsbm")
 
