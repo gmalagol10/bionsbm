@@ -406,7 +406,7 @@ class bionsbm():
         """
         return self.mdl
             
-    def _get_shape(self):
+    def get_shape(self):
         """
         :return: list of tuples (number of documents, number of words, (number of keywords,...))
         """
@@ -475,7 +475,7 @@ class bionsbm():
         state_l = self.state.project_level(l).copy(overlap=True)
         state_l_edges = state_l.get_edge_blocks()
         B = state_l.get_B()
-        D, W, K = self._get_shape()
+        D, W, K = self.get_shape()
         nbranches = self.nbranches
 
         # Preallocate primary arrays (word/doc)
