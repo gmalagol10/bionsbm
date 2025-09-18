@@ -158,7 +158,7 @@ class bionsbm():
 		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True: 
 			self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
 
-		elif os.path.isfile(f"{self.path_to_graph}_graph.xml.gz") == True
+		elif os.path.isfile(f"{self.path_to_graph}_graph.xml.gz") == True:
 			self.load_graph(filename=f"{self.path_to_graph}_graph.xml.gz")
 
 		else:  
