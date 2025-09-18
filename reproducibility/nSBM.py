@@ -3,7 +3,8 @@ warnings.filterwarnings('ignore')
 
 import muon as mu
 import bionsbm
-
+import time
+import os
 
 print(f"nSBM script started at:", time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), flush=True)
 
