@@ -423,6 +423,40 @@ class bionsbm():
 		if l in self.groups:
 			return self.groups[l]
 	
+	# --- Numba kernel with O(1) offset lookup ---
+	@njit
+	def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights,
+								  D, W, K_arr, offsets, nbranches,
+								  n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
+		m = len(sources)
+		for i in range(m):
+			v1 = sources[i]
+			v2 = targets[i]
+			w = weights[i]
+			t1 = z1[i]
+			t2 = z2[i]
+			kind = kinds[i]
+
+			# update doc-group counts
+			n_db[v1, t1] += w
+
+			if kind == 1:
+				# word node
+				idx_w = v2 - D
+				if 0 <= idx_w < n_wb.shape[0]:
+					n_wb[idx_w, t2] += w
+				n_dbw[v1, t2] += w
+
+			elif kind >= 2:
+				ik = kind - 2
+				if 0 <= ik < nbranches:
+					idx_k = v2 - offsets[ik]  # O(1) offset lookup
+					if 0 <= idx_k < K_arr[ik]:
+						n_w_key_b3[ik, idx_k, t2] += w
+						n_dbw_key3[ik, v1, t2] += w
+
+
+
 		# --- Setup ---
 		state_l = self.state.project_level(l).copy(overlap=True)
 		B = state_l.get_B()
