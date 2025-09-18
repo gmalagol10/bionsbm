@@ -319,9 +319,6 @@ class bionsbm():
 			
 		multilevel_mcmc_args={"B_min": B_min, "B_max": B_max, "verbose": verbose,"parallel" : parallel}
 
-		logger.debug("multilevel_mcmc_args: %s", multilevel_mcmc_args)
-		logger.debug("state_args: %s", state_args)
-
 		for i in range(n_init):
 			logger.info("Fit number: %d", i)
 			state = minimize_nested_blockmodel_dl(self.g, state_args=state_args, multilevel_mcmc_args=multilevel_mcmc_args, *args, **kwargs)
