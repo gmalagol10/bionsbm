@@ -46,10 +46,8 @@ if not logger.handlers:  # prevent adding multiple handlers
 	formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 	ch.setFormatter(formatter)
 	logger.addHandler(ch)
-######################################
-import time
-from muon import read_h5mu
 
+######################################
 class bionsbm():
 	"""
 	Class to run bionsbm
@@ -340,7 +338,7 @@ class bionsbm():
 
 		self.groups = {}
 		logger.info("Saving data in %s", self.saving_path)
-		self.save_data(path_to_save=self.saving_path)
+		self.save_data()
 
 		logger.info("Annotate object")
 		self.annotate_obj()
@@ -423,38 +421,35 @@ class bionsbm():
 		if l in self.groups:
 			return self.groups[l]
 	
-	# --- Numba kernel with O(1) offset lookup ---
-	@njit
-	def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights,
-								  D, W, K_arr, offsets, nbranches,
-								  n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
-		m = len(sources)
-		for i in range(m):
-			v1 = sources[i]
-			v2 = targets[i]
-			w = weights[i]
-			t1 = z1[i]
-			t2 = z2[i]
-			kind = kinds[i]
-
-			# update doc-group counts
-			n_db[v1, t1] += w
-
-			if kind == 1:
-				# word node
-				idx_w = v2 - D
-				if 0 <= idx_w < n_wb.shape[0]:
-					n_wb[idx_w, t2] += w
-				n_dbw[v1, t2] += w
-
-			elif kind >= 2:
-				ik = kind - 2
-				if 0 <= ik < nbranches:
-					idx_k = v2 - offsets[ik]  # O(1) offset lookup
-					if 0 <= idx_k < K_arr[ik]:
-						n_w_key_b3[ik, idx_k, t2] += w
-						n_dbw_key3[ik, v1, t2] += w
-
+		# --- Numba kernel with O(1) offset lookup ---
+		@njit
+		def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights, D, W, K_arr, offsets, nbranches, n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
+			m = len(sources)
+			for i in range(m):
+				v1 = sources[i]
+				v2 = targets[i]
+				w = weights[i]
+				t1 = z1[i]
+				t2 = z2[i]
+				kind = kinds[i]
+	
+				# update doc-group counts
+				n_db[v1, t1] += w
+	
+				if kind == 1:
+					# word node
+					idx_w = v2 - D
+					if 0 <= idx_w < n_wb.shape[0]:
+						n_wb[idx_w, t2] += w
+					n_dbw[v1, t2] += w
+	
+				elif kind >= 2:
+					ik = kind - 2
+					if 0 <= ik < nbranches:
+						idx_k = v2 - offsets[ik]  # O(1) offset lookup
+						if 0 <= idx_k < K_arr[ik]:
+							n_w_key_b3[ik, idx_k, t2] += w
+							n_dbw_key3[ik, v1, t2] += w
 
 
 		# --- Setup ---
@@ -570,7 +565,7 @@ class bionsbm():
 
 
 
-	def save_single_level(self, l: int, path_to_save: str) -> None:
+	def save_single_level(self, l: int) -> None:
 		"""
 		Save per-level probability matrices (topics, clusters, documents) for the given level.
 
@@ -578,7 +573,7 @@ class bionsbm():
 		----------
 		l : int
 			The level index to save. Must be within the range of available self levels.
-		savingpath_to_save_path : str
+		saving in self.saving_path_path : str
 			Base path (folder + prefix) where files will be written.
 			Example: "results/myself" → files like:
 				- results/myself_level_0_mainfeature_topics.tsv.gz
@@ -596,8 +591,8 @@ class bionsbm():
 		# --- Validate inputs ---
 		if not isinstance(l, int) or l < 0 or l >= len(self.state.levels) or l >= len(self.state.levels):
 			raise ValueError(f"Invalid level index {l}. Must be between 0 and {len(self.state.levels) - 1}.")
-		if not isinstance(path_to_save, str) or not path_to_save.strip():
-			raise ValueError("`path_to_save` must be a non-empty string path prefix.")
+		if not isinstance(self.saving_path, str) or not self.saving_path.strip():
+			raise ValueError("`self.saving_path` must be a non-empty string path prefix.")
 
 		main_feature = self.modalities[0]
 
@@ -616,42 +611,42 @@ class bionsbm():
 
 		# --- P(document | cluster) ---
 		clusters = pd.DataFrame(data=data["p_td_d"], columns=self.documents)
-		_safe_save(clusters, f"{path_to_save}_level_{l}_clusters.tsv.gz")
+		_safe_save(clusters, f"{self.saving_path}_level_{l}_clusters.tsv.gz")
 
 
 		# --- P(main_feature | main_topic) ---
 		p_w_tw = pd.DataFrame(data=data["p_w_tw"], index=self.words,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-		_safe_save(p_w_tw, f"{path_to_save}_level_{l}_{main_feature}_topics.tsv.gz")
+		_safe_save(p_w_tw, f"{self.saving_path}_level_{l}_{main_feature}_topics.tsv.gz")
 
 		# --- P(main_topic | documents) ---
 		p_tw_d = pd.DataFrame(data=data["p_tw_d"].T,index=self.documents,
 			columns=[f"{main_feature}_topic_{i}" for i in range(data["p_w_tw"].shape[1])])
-		_safe_save(p_tw_d, f"{path_to_save}_level_{l}_{main_feature}_topics_documents.tsv.gz")
+		_safe_save(p_tw_d, f"{self.saving_path}_level_{l}_{main_feature}_topics_documents.tsv.gz")
 
 		# --- P(meta_feature | meta_topic_feature), if any ---
 		if len(self.modalities) > 1:
 			for k, meta_features in enumerate(self.modalities[1:]):
 				p_w_tw = pd.DataFrame(data=data["p_w_key_tk"][k], index=self.keywords[k],
 					columns=[f"{meta_features}_topic_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				_safe_save(p_w_tw, f"{path_to_save}_level_{l}_{meta_features}_topics.tsv.gz")
+				_safe_save(p_w_tw, f"{self.saving_path}_level_{l}_{meta_features}_topics.tsv.gz")
 
 
 			# --- P(meta_topic | document) ---
 			for k, meta_features in enumerate(self.modalities[1:]):
 				p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
 					columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
-				_safe_save(p_tw_d, f"{path_to_save}_level_{l}_{meta_features}_topics_documents.tsv.gz")
+				_safe_save(p_tw_d, f"{self.saving_path}_level_{l}_{meta_features}_topics_documents.tsv.gz")
 
 
 
-	def save_data(self, path_to_save: str = "results/myself") -> None:
+	def save_data(self) -> None:
 		"""
 		Save the global graph, self, state, and level-specific data for the current nSBM self.
 
 		Parameters
 		----------
-		savinpath_to_saveg_path : str, optional
+		saving in self.saving_pathg_path : str, optional
 			Base path (folder + prefix) where all outputs will be saved.
 			Example: "results/myself" will produce:
 				- results/myself_graph.xml.gz
@@ -666,7 +661,7 @@ class bionsbm():
 		- Level saving is parallelized with threads for efficiency in I/O.
 		- By default, at most self.max_depth levels are saved, or fewer if the self has <self.max_depth levels.
 		"""
-		logger.info("Saving self data to %s", path_to_save)
+		logger.info("Saving self data to %s", self.saving_path)
 
 		L = min(len(self.state.levels), self.max_depth)
 		self.L = L
@@ -674,27 +669,27 @@ class bionsbm():
 			logger.warning("Nothing to save (no levels found)")
 			return
 		
-		folder = os.path.dirname(path_to_save)
+		folder = os.path.dirname(self.saving_path)
 		Path(folder).mkdir(parents=True, exist_ok=True)
 
 		try:
-			self.save_graph(filename=f"{path_to_save}_graph.xml.gz")
-			self.dump_model(filename=f"{path_to_save}_self.pkl")
+			self.save_graph(filename=f"{self.saving_path}_graph.xml.gz")
+			self.dump_model(filename=f"{self.saving_path}_self.pkl")
 
-			with open(f"{path_to_save}_entropy.txt", "w") as f:
+			with open(f"{self.saving_path}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
 
-			with open(f"{path_to_save}_state.pkl", "wb") as f:
+			with open(f"{self.saving_path}_state.pkl", "wb") as f:
 				pickle.dump(self.state, f)
 
 		except Exception as e:
 			logger.error("Failed to save global files: %s", e)
-			raise RuntimeError(f"Failed to save global files for self '{path_to_save}': {e}") from e
+			raise RuntimeError(f"Failed to save global files for self '{self.saving_path}': {e}") from e
 
 
 		errors = []
 		with ThreadPoolExecutor() as executor:
-			futures = {executor.submit(self.save_single_level, l, path_to_save): l for l in range(L)}
+			futures = {executor.submit(self.save_single_level, l): l for l in range(L)}
 			for future in as_completed(futures):
 				l = futures[future]
 				try:
