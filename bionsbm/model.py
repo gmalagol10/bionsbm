@@ -645,7 +645,7 @@ class bionsbm():
 
 		try:
 			self.save_graph(filename=f"{path_to_save}_graph.xml.gz")
-			self.dump_self(filename=f"{path_to_save}_self.pkl")
+			self.dump_model(filename=f"{path_to_save}_self.pkl")
 
 			with open(f"{path_to_save}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
