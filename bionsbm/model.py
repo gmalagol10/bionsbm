@@ -650,7 +650,7 @@ class bionsbm():
 			Base path (folder + prefix) where all outputs will be saved.
 			Example: "results/myself" will produce:
 				- results/myself_graph.xml.gz
-				- results/myself_self.pkl	
+				- results/myself_model.pkl	
 				- results/myself_entropy.txt
 				- results/myself_state.pkl
 				- results/myself_level_X_*.tsv.gz  (per level, up to 6 levels)
@@ -674,7 +674,7 @@ class bionsbm():
 
 		try:
 			self.save_graph(filename=f"{self.saving_path}_graph.xml.gz")
-			self.dump_model(filename=f"{self.saving_path}_self.pkl")
+			self.dump_model(filename=f"{self.saving_path}_model.pkl")
 
 			with open(f"{self.saving_path}_entropy.txt", "w") as f:
 				f.write(str(self.state.entropy()))
