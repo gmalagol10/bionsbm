@@ -441,14 +441,14 @@ class bionsbm():
 			offsets = np.empty(0, dtype=np.int64)
 	
 		# --- Get cached edge arrays ---
-		edge_cache = self._get_edge_cache(self)
+		edge_cache = self._get_edge_cache()
 		sources = edge_cache["sources"]
 		targets = edge_cache["targets"]
 		weights = edge_cache["weights"]
 		kinds = edge_cache["kinds"]
 	
 		# --- Get cached block assignments ---
-		z_pairs = self._get_state_l_edges_array(self, state_l)
+		z_pairs = self._get_state_l_edges_array(state_l)
 		z1_arr = z_pairs[:, 0]
 		z2_arr = z_pairs[:, 1]
 	
