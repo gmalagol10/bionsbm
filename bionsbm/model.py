@@ -118,155 +118,68 @@ class bionsbm():
 		self.node_type=node_type 
 
 		
-	def make_graph(self, df: pd.DataFrame, df_keyword_list: List[pd.DataFrame]) -> None:
-		"""
-		Build a heterogeneous graph from a main feature DataFrame and optional keyword/meta-feature DataFrames.
+	def make_graph(self, df_one: pd.DataFrame, df_keyword_list: List[pd.DataFrame]) -> None:
+		df_all = df_one.copy(deep =True)
+		for ikey,df_keyword in enumerate(df_keyword_list):
+			df_keyword = df_keyword.reindex(columns=df_one.columns)
+			df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
+			df_keyword["kind"] = ikey+2
+			df_all = pd.concat((df_all, df_keyword), axis=0)
+		del df_keyword, df_one
 
-		This function constructs a bipartite (documents–words) or multi-branch
-		graph (documents–words–keywords/meta-features) using the input matrices.
-		If a cached graph file exists at ``self.saving_path``, it is loaded directly
-		instead of rebuilding.
+		kinds=pd.DataFrame(df_all["kind"].fillna(1)) if len()
 
-		Parameters
-		----------
-		df : pandas.DataFrame
-			Main feature matrix with words/features as rows (index) and
-			documents/samples as columns.
-		df_keyword_list : list of pandas.DataFrame
-			List of additional matrices (e.g., keywords, annotations, or meta-features).
-			Each DataFrame must have the same columns as ``df`` (documents),
-			and its rows will be treated as a separate feature branch.
-
-		Notes
-		-----
-		- Each branch is assigned a unique ``kind`` index:
-		  * 0 → documents
-		  * 1 → main features (e.g., words/genes)
-		  * 2, 3, ... → subsequent keyword/meta-feature branches
-		- If a saved graph already exists at
-		  ``{self.saving_path}_graph.xml.gz``, it will be loaded instead of recreated.
-		- After graph construction, the graph is saved to disk in Graph-Tool format.
-
-		Raises
-		------
-		ValueError
-			If ``df`` and ``df_keyword_list`` cannot be aligned properly
-			(e.g., inconsistent columns).
-		"""
-		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True: 
-			self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
-
-		elif os.path.isfile(f"{self.path_to_graph}_graph.xml.gz") == True:
-			self.load_graph(filename=f"{self.path_to_graph}_graph.xml.gz")
-
-		else:  
-			logger.info("Creating graph from multiple DataFrames")
-			df_all = df.copy(deep =True)
-			for ikey,df_keyword in enumerate(df_keyword_list):
-				df_keyword = df_keyword.reindex(columns=df.columns)
-				df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
-				df_keyword["kind"] = ikey+2
-				df_all = pd.concat((df_all,df_keyword), axis=0)
-   
-			def get_kind(word):
-				return 1 if word in df.index else df_all.at[word,"kind"]
-   
-			self.nbranches = len(df_keyword_list)
-		   
-			self.make_graph_single(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
-
-			folder = os.path.dirname(self.saving_path)
-			Path(folder).mkdir(parents=True, exist_ok=True)
-			self.save_graph(filename=f"{self.saving_path}_graph.xml.gz")
-
-
-	def make_graph_single(self, df: pd.DataFrame, get_kind) -> None:
-
-		"""
-		Construct a graph-tool graph from a single feature matrix.
-
-		This method builds a bipartite or multi-branch graph from the given
-		DataFrame, where columns represent documents/samples and rows represent
-		features (e.g., words, genes, or keywords). Vertices are created for
-		both documents and features, and weighted edges connect documents to
-		their features.
-
-		Parameters
-		----------
-		df : pandas.DataFrame
-			Feature matrix with rows as features (words, genes, or keywords)
-			and columns as documents/samples. The values must be numeric and
-			represent counts or weights of feature occurrences.
-		get_kind : callable
-			Function that takes a feature name (row index from ``df``) and
-			returns an integer specifying the vertex kind:
-			- 0 → document nodes
-			- 1 → main feature nodes
-			- 2, 3, ... → keyword/meta-feature branch nodes
-
-		Notes
-		-----
-		- The constructed graph is undirected.
-		- Vertices are annotated with two properties:
-		  * ``name`` (string): document or feature name.
-		  * ``kind`` (int): node type (document, word, or keyword branch).
-		- Edges are annotated with ``count`` (int), representing the weight.
-		- Edges with zero weight are removed after construction.
-		- The graph is stored in ``self.g``
-
-		Raises
-		------
-		ValueError
-			If the resulting graph has no edges (i.e., ``df`` is empty or contains only zeros).	
-		"""
+		self.nbranches = len(df_keyword_list)
+		del df_keyword_list
+			
+		df_all.drop("kind", axis=1, errors='ignore', inplace=True)
 		
-		logger.info("Building graph with %d docs and %d words", df.shape[1], df.shape[0])
 		self.g = Graph(directed=False)
 
-		n_docs, n_words = df.shape[1], df.shape[0]
-	
+		n_docs, n_words = df_all.shape[1], df_all.shape[0]
+
 		# Add all vertices first
 		self.g.add_vertex(n_docs + n_words)
-	
+
 		# Create vertex properties
 		name = self.g.new_vp("string")
 		kind = self.g.new_vp("int")
 		self.g.vp["name"] = name
 		self.g.vp["kind"] = kind
-	
+
 		# Assign doc vertices (loop for names, array for kind)
-		for i, doc in enumerate(df.columns):
+		for i, doc in enumerate(df_all.columns):
 			name[self.g.vertex(i)] = doc
 		kind.get_array()[:n_docs] = 0
-	
+
 		# Assign word vertices (loop for names, array for kind)
-		for j, word in enumerate(df.index):
+		for j, word in enumerate(df_all.index):
 			name[self.g.vertex(n_docs + j)] = word
-		kind.get_array()[n_docs:] = np.array([get_kind(w) for w in df.index], dtype=int)
-	
+		kind.get_array()[n_docs:] = np.array([int(kinds.at[w,"kind"]) for w in df_all.index], dtype=int)
+
 		# Edge weights
 		weight = self.g.new_ep("int")
 		self.g.ep["count"] = weight
-	
+
 		# Build sparse edges
-		rows, cols = df.values.nonzero()
-		vals = df.values[rows, cols].astype(int)
+		rows, cols = df_all.values.nonzero()
+		vals = df_all.values[rows, cols].astype(int)
 		edges = [(c, n_docs + r, v) for r, c, v in zip(rows, cols, vals)]
 		if len(edges)==0: raise ValueError("Empty graph")
-	
+
 		self.g.add_edge_list(edges, eprops=[weight])
-	
+
 		# Remove edges with 0 weight
 		filter_edges = self.g.new_edge_property("bool")
 		filter_edges.a = weight.a > 0
 		self.g.set_edge_filter(filter_edges)
 		self.g.purge_edges()
 		self.g.clear_filters()
-	
-		self.documents = df.columns
-		self.words = df.index[self.g.vp['kind'].a[n_docs:] == 1]
+
+		self.documents = df_all.columns
+		self.words = df_all.index[self.g.vp['kind'].a[n_docs:] == 1]
 		for ik in range(2, 2 + self.nbranches):
-			self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
+			self.keywords.append(df_all.index[self.g.vp['kind'].a[n_docs:] == ik])
 
 
 	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
@@ -340,6 +253,156 @@ class bionsbm():
 		logger.info("Annotate object")
 		self.annotate_obj()
 
+	def get_groups(self, l=0):
+		"""
+		Compute group-level summary matrices
+
+		Parameters
+		----------
+		l : int, default=0
+			Hierarchical level to project the fitted nested blockmodel to.
+
+		Returns
+		-------
+		dict
+			A dictionary with the following keys (matching the original `get_groups`):
+			- 'Bd' : int
+				Number of active document groups (after pruning empty columns).
+			- 'Bw' : int
+				Number of active word groups (after pruning).
+			- 'Bk' : list[int]
+				Number of active keyword groups per keyword branch (after pruning).
+			- 'p_tw_w' : np.ndarray, shape (Bw, W)
+				Group membership of each word node: P(t_w | w). Rows sum to 1; rows
+				corresponding to words with zero mass are all-NaN.
+			- "p_tk_w_key" : list[np.ndarray]
+				For each keyword branch `ik`, matrix of shape (Bk[ik], K[ik]) with
+				P(t_k | keyword). Rows with zero mass are all-NaN.
+			- 'p_td_d' : np.ndarray, shape (Bd, D)
+				Group membership of each document node: P(t_d | d). Rows with zero
+				mass are all-NaN.
+			- 'p_w_tw' : np.ndarray, shape (W, Bw)
+				Topic distribution for words: P(w | t_w). Columns with zero mass
+				are all-NaN.
+			- 'p_w_key_tk' : list[np.ndarray]
+				For each keyword branch `ik`, matrix of shape (K[ik], Bk[ik]) with
+				P(keyword | t_k). Columns with zero mass are all-NaN.
+			- 'p_tw_d' : np.ndarray, shape (Bw, D)
+				Mixture of word-groups in documents: P(t_w | d). Rows with zero
+				mass are all-NaN.
+			- 'p_tk_d' : list[np.ndarray]
+				For each keyword branch `ik`, matrix of shape (Bk[ik], D) with
+				P(t_k | d). Rows with zero mass are all-NaN.
+
+		"""
+
+
+		if l in self.groups.keys():
+			return self.groups[l]
+		# --- project to level; non-overlap for speed & simple b[v] array ---
+		state_l = self.state.project_level(l).copy(overlap=False)
+		b_arr = state_l.get_blocks().a.astype(np.int64)
+		B = int(state_l.get_B())
+	
+		# --- basic shapes ---
+		D, W, K = self.get_shape()
+		K = list(K)
+		K_cumsum = np.cumsum([0] + K)				  # [0, K0, K0+K1, ...]
+		KW_offsets = D + W + K_cumsum[:-1]			 # global start index for each keyword branch
+	
+		# --- pull edges in bulk: src, tgt, weight ---
+		e_mat = self.g.get_edges(eprops=[self.g.ep["count"]])
+		src = e_mat[:, 0].astype(np.int64)
+		tgt = e_mat[:, 1].astype(np.int64)
+		w   = e_mat[:, 2].astype(np.int64)
+	
+		z_src = b_arr[src]
+		z_tgt = b_arr[tgt]
+	
+		kind = self.g.vp['kind'].a
+		kind_tgt = kind[tgt]
+	
+		# --- alloc accumulators ---
+		n_wb	  = np.zeros((W, B), dtype=np.int64)
+		n_db	  = np.zeros((D, B), dtype=np.int64)
+		n_dbw	 = np.zeros((D, B), dtype=np.int64)
+		n_w_key_b = [np.zeros((K[ik], B), dtype=np.int64) for ik in range(self.nbranches)]
+		n_dbw_key = [np.zeros((D, B), dtype=np.int64)	 for _  in range(self.nbranches)]
+	
+		# --- accumulate (vectorized) ---
+		# docs are sources by construction
+		np.add.at(n_db, (src, z_src), w)
+	
+		# words as targets (kind == 1)
+		mask_w = (kind_tgt == 1)
+		if mask_w.any():
+			w_idx = tgt[mask_w] - D
+			np.add.at(n_wb,  (w_idx,		   z_tgt[mask_w]), w[mask_w])
+			np.add.at(n_dbw, (src[mask_w],	 z_tgt[mask_w]), w[mask_w])
+	
+		# keywords as targets (kind >= 2)
+		if self.nbranches > 0:
+			mask_kw = (kind_tgt >= 2)
+			if mask_kw.any():
+				kw_kinds = kind_tgt[mask_kw]  # values in {2,3,...}
+				sel_kw = np.where(mask_kw)[0]
+				for ik in range(self.nbranches):
+					m = (kw_kinds == (ik + 2))
+					if not m.any():
+						continue
+					sel = sel_kw[m]
+					kw_local = tgt[sel] - KW_offsets[ik]
+					np.add.at(n_w_key_b[ik], (kw_local,   z_tgt[sel]), w[sel])
+					np.add.at(n_dbw_key[ik], (src[sel],   z_tgt[sel]), w[sel])
+	
+		# --- prune empty columns exactly like original ---
+		ind_d = np.where(np.sum(n_db,  axis=0) > 0)[0];  Bd = len(ind_d);  n_db  = n_db[:,  ind_d]
+		ind_w = np.where(np.sum(n_wb,  axis=0) > 0)[0];  Bw = len(ind_w);  n_wb  = n_wb[:,  ind_w]
+		ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0];					   n_dbw = n_dbw[:, ind_w2]
+	
+		ind_w_key, ind_w2_keyword, Bk = [], [], []
+		for ik in range(self.nbranches):
+			idx1 = np.where(np.sum(n_w_key_b[ik],  axis=0) > 0)[0]
+			idx2 = np.where(np.sum(n_dbw_key[ik],  axis=0) > 0)[0]
+			ind_w_key.append(idx1); ind_w2_keyword.append(idx2); Bk.append(len(idx1))
+			n_w_key_b[ik] = n_w_key_b[ik][:, idx1]
+			n_dbw_key[ik] = n_dbw_key[ik][:, idx2]
+	
+		# --- NaN-preserving normalizers (match original semantics) ---
+		def _row_norm_nan(M: np.ndarray) -> np.ndarray:
+			M = M.astype(float, copy=False)
+			s = M.sum(axis=1, keepdims=True)
+			out = np.full_like(M, np.nan, dtype=float)
+			valid = (s[:, 0] != 0)
+			if np.any(valid):
+				out[valid] = M[valid] / s[valid]
+			return out.T  # original returns transposed
+	
+		def _col_norm_nan(M: np.ndarray) -> np.ndarray:
+			M = M.astype(float, copy=False)
+			s = M.sum(axis=0, keepdims=True)
+			out = np.full_like(M, np.nan, dtype=float)
+			valid = (s[0] != 0)
+			if np.any(valid):
+				out[:, valid] = M[:, valid] / s[:, valid]
+			return out
+	
+		# --- probabilities (identical layout to original) ---
+		p_tw_w	  = _row_norm_nan(n_wb)
+		p_tk_w_key  = [_row_norm_nan(n_w_key_b[ik]) for ik in range(self.nbranches)]
+		p_w_tw	  = _col_norm_nan(n_wb)
+		p_w_key_tk  = [_col_norm_nan(n_w_key_b[ik]) for ik in range(self.nbranches)]
+		p_tw_d	  = _row_norm_nan(n_dbw)
+		p_tk_d	  = [_row_norm_nan(n_dbw_key[ik]) for ik in range(self.nbranches)]
+		p_td_d	  = _row_norm_nan(n_db)
+	
+		result = dict(
+			Bd=Bd, Bw=Bw, Bk=Bk,
+			p_tw_w=p_tw_w, p_tk_w_key=p_tk_w_key, p_td_d=p_td_d,
+			p_w_tw=p_w_tw, p_w_key_tk=p_w_key_tk, p_tw_d=p_tw_d, p_tk_d=p_tk_d
+		)
+		self.groups[l] = result
+		return result
 
 	# Helper functions
 	def save_graph(self, filename: str = "graph.xml.gz") -> None:
@@ -371,195 +434,6 @@ class bionsbm():
 		self.nbranches = len(metadata_indexes)
 		for i_keyword in metadata_indexes:
 			self.keywords.append([self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == i_keyword])
-
-	
-	def _get_edge_cache(self):
-		"""
-		Cache edge sources, targets, weights, and kinds once per graph.
-		"""
-		if hasattr(self, "_edge_cache"):
-			return self._edge_cache
-	
-		edge_array = self.g.get_edges()  # shape (m, 2)
-		sources = edge_array[:, 0].astype(np.int64)
-		targets = edge_array[:, 1].astype(np.int64)
-	
-		weights = self.g.ep["count"].a.astype(np.float64)
-		kinds = self.g.vp["kind"].a[targets].astype(np.int64)
-	
-		self._edge_cache = {"sources": sources, "targets": targets, "weights": weights, "kinds": kinds}
-		return self._edge_cache
-	
-	
-	def _get_state_l_edges_array(self, state_l):
-		"""
-		Cache block assignments (z1, z2) once per hierarchy level.
-		"""
-		if hasattr(state_l, "_edges_array_cache"):
-			return state_l._edges_array_cache
-	
-		edges = list(self.g.edges())
-		state_l_edges = state_l.get_edge_blocks()
-	
-		arr = np.empty((len(edges), 2), dtype=np.int64)
-		for i, e in enumerate(edges):
-			arr[i, 0] = state_l_edges[e][0]
-			arr[i, 1] = state_l_edges[e][1]
-	
-		state_l._edges_array_cache = arr
-		return arr
-	
-	
-	def get_groups(self, l=0):
-		"""
-		Fully optimized get_groups with caching of edges and block assignments.
-		No per-edge Python loops in the hot path.
-		"""
-		if l in self.groups:
-			return self.groups[l]
-	
-		# --- Numba kernel with O(1) offset lookup ---
-		@njit
-		def process_edges_numba_stack(sources, targets, z1, z2, kinds, weights, D, W, K_arr, offsets, nbranches, n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3):
-			m = len(sources)
-			for i in range(m):
-				v1 = sources[i]
-				v2 = targets[i]
-				w = weights[i]
-				t1 = z1[i]
-				t2 = z2[i]
-				kind = kinds[i]
-	
-				# update doc-group counts
-				n_db[v1, t1] += w
-	
-				if kind == 1:
-					# word node
-					idx_w = v2 - D
-					if 0 <= idx_w < n_wb.shape[0]:
-						n_wb[idx_w, t2] += w
-					n_dbw[v1, t2] += w
-	
-				elif kind >= 2:
-					ik = kind - 2
-					if 0 <= ik < nbranches:
-						idx_k = v2 - offsets[ik]  # O(1) offset lookup
-						if 0 <= idx_k < K_arr[ik]:
-							n_w_key_b3[ik, idx_k, t2] += w
-							n_dbw_key3[ik, v1, t2] += w
-
-
-		# --- Setup ---
-		state_l = self.state.project_level(l).copy(overlap=True)
-		B = state_l.get_B()
-		D, W, K = self.get_shape()
-		nbranches = self.nbranches
-		K_arr = np.array(K, dtype=np.int64)
-	
-		# --- Precompute branch offsets ---
-		if nbranches > 0 and K_arr.size > 0:
-			prefix_K = np.empty(nbranches, dtype=np.int64)
-			prefix_K[0] = 0
-			for ii in range(1, nbranches):
-				prefix_K[ii] = prefix_K[ii-1] + K_arr[ii-1]
-			offsets = (D + W) + prefix_K
-		else:
-			offsets = np.empty(0, dtype=np.int64)
-	
-		# --- Get cached edge arrays ---
-		edge_cache = self._get_edge_cache()
-		sources = edge_cache["sources"]
-		targets = edge_cache["targets"]
-		weights = edge_cache["weights"]
-		kinds = edge_cache["kinds"]
-	
-		# --- Get cached block assignments ---
-		z_pairs = self._get_state_l_edges_array(state_l)
-		z1_arr = z_pairs[:, 0]
-		z2_arr = z_pairs[:, 1]
-	
-		# --- Allocate accumulators ---
-		n_wb = np.zeros((W, B), dtype=np.float64)
-		n_db = np.zeros((D, B), dtype=np.float64)
-		n_dbw = np.zeros((D, B), dtype=np.float64)
-		n_w_key_b3 = np.zeros((nbranches, np.max(K_arr) if nbranches > 0 else 0, B), dtype=np.float64)
-		n_dbw_key3 = np.zeros((nbranches, D, B), dtype=np.float64)
-	
-		# --- Process edges ---
-		process_edges_numba_stack(sources, targets, z1_arr, z2_arr, kinds, weights, D, W, K_arr, offsets, nbranches, n_db, n_wb, n_dbw, n_w_key_b3, n_dbw_key3)
-	
-		# --- Trim and normalize (unchanged) ---
-		ind_d = np.where(np.sum(n_db, axis=0) > 0)[0]
-		n_db = n_db[:, ind_d]
-		Bd = len(ind_d)
-	
-		ind_w = np.where(np.sum(n_wb, axis=0) > 0)[0]
-		n_wb = n_wb[:, ind_w]
-		Bw = len(ind_w)
-	
-		ind_w2 = np.where(np.sum(n_dbw, axis=0) > 0)[0]
-		n_dbw = n_dbw[:, ind_w2]
-	
-		n_w_key_b_list, n_dbw_key_list, Bk = [], [], []
-		for ik in range(nbranches):
-			Kk = int(K_arr[ik]) if K_arr.size > 0 else 0
-			if Kk > 0:
-				col_sums = np.sum(n_w_key_b3[ik, :Kk, :], axis=0)
-				ind_wk = np.where(col_sums > 0)[0]
-				if ind_wk.size > 0:
-					n_w_key_b_list.append(n_w_key_b3[ik, :Kk, :][:, ind_wk].copy())
-				else:
-					n_w_key_b_list.append(np.zeros((Kk, 0), dtype=np.float64))
-				Bk.append(len(ind_wk))
-			else:
-				n_w_key_b_list.append(np.zeros((0, 0), dtype=np.float64))
-				Bk.append(0)
-	
-			col_sums_dbw = np.sum(n_dbw_key3[ik], axis=0)
-			ind_w2k = np.where(col_sums_dbw > 0)[0]
-			if ind_w2k.size > 0:
-				n_dbw_key_list.append(n_dbw_key3[ik][:, ind_w2k].copy())
-			else:
-				n_dbw_key_list.append(np.zeros((D, 0), dtype=np.float64))
-	
-		# --- Distributions ---
-		denom = np.sum(n_wb, axis=1, keepdims=True)
-		p_tw_w = (n_wb / denom).T
-	
-		p_tk_w_key = []
-		for ik in range(nbranches):
-			arr = n_w_key_b_list[ik]
-			denom = np.sum(arr, axis=1, keepdims=True)
-			p_tk_w_key.append((arr / denom).T)
-	
-		denom = np.sum(n_wb, axis=0, keepdims=True)
-		p_w_tw = n_wb / denom
-	
-		p_w_key_tk = []
-		for ik in range(nbranches):
-			arr = n_w_key_b_list[ik]
-			denom = np.sum(arr, axis=0, keepdims=True)
-			p_w_key_tk.append(arr / denom)
-	
-		denom = np.sum(n_dbw, axis=1, keepdims=True)
-		p_tw_d = (n_dbw / denom).T
-	
-		p_tk_d = []
-		for ik in range(nbranches):
-			arr = n_dbw_key_list[ik]
-			denom = np.sum(arr, axis=1, keepdims=True)
-			p_tk_d.append((arr / denom).T)
-	
-		denom = np.sum(n_db, axis=1, keepdims=True)
-		p_td_d = (n_db / denom).T
-	
-		result = {'Bd': Bd, 'Bw': Bw, 'Bk': Bk,
-					'p_tw_w': p_tw_w, 'p_tk_w_key': p_tk_w_key, 'p_td_d': p_td_d,
-					'p_w_tw': p_w_tw, 'p_w_key_tk': p_w_key_tk, 'p_tw_d': p_tw_d, 'p_tk_d': p_tk_d}
-	
-		self.groups[l] = result
-		return result
-
 
 
 	def save_single_level(self, l: int) -> None:
@@ -634,7 +508,6 @@ class bionsbm():
 				p_tw_d = pd.DataFrame(data=data["p_tk_d"][k].T, index=self.documents,
 					columns=[f"{meta_features}_topics_{i}" for i in range(data["p_w_key_tk"][k].shape[1])])
 				_safe_save(p_tw_d, f"{self.saving_path}_level_{l}_{meta_features}_topics_documents.tsv.gz")
-
 
 
 	def save_data(self) -> None:
