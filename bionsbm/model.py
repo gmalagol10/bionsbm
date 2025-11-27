@@ -153,7 +153,7 @@ class bionsbm():
 			If ``df`` and ``df_keyword_list`` cannot be aligned properly
 			(e.g., inconsistent columns).
 		"""
-		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True & self.load_if_exists == True: 
+		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True and self.load_if_exists == True: 
 			self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
 
 		else:  
