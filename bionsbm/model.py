@@ -822,5 +822,3 @@ class bionsbm():
 			edge_pen_width = self.g.ep["count"],
 			vertex_color=colmap,
 			vertex_fill_color=colmap, *args, **kwargs)
-Selection deleted
-
