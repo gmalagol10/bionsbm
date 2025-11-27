@@ -54,7 +54,7 @@ class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", path_to_graph=None):
+	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", load_if_exists=None):
 		"""
 		Initialize a bionsbm self.
 
@@ -90,7 +90,7 @@ class bionsbm():
 		self.max_depth: int = max_depth
 		self.obj: Any = obj
 		self.saving_path: str = saving_path
-		self.path_to_graph = path_to_graph
+		self.load_if_exists = load_if_exists
 
 		if isinstance(obj, MuData):
 			self.modalities=list(obj.mod.keys())   
@@ -155,11 +155,8 @@ class bionsbm():
 			If ``df`` and ``df_keyword_list`` cannot be aligned properly
 			(e.g., inconsistent columns).
 		"""
-		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True: 
+		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True & self.load_if_exists == True: 
 			self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
-
-		elif os.path.isfile(f"{self.path_to_graph}_graph.xml.gz") == True:
-			self.load_graph(filename=f"{self.path_to_graph}_graph.xml.gz")
 
 		else:  
 			logger.info("Creating graph from multiple DataFrames")
