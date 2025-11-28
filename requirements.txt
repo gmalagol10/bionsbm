@@ -3,3 +3,6 @@ scanpy
 scipy
 numba
 cloudpickle
+psutil
+torch
+torch_scatter
