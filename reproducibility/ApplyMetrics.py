@@ -18,7 +18,7 @@ import nmi
 
 dataset=sys.argv[1]
 print("Dataset:", dataset, flush=True)
-c<yc
+
 #+++++++++++++++++++++++++++++++ SBM +++++++++++++++++++++++++++++++
 print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"hSBM and nSBM", flush=True)
 metadata=pd.read_csv(f"Datasets/{dataset}/{dataset}_Metadata.tsv.gz", sep="\t", index_col=0)
