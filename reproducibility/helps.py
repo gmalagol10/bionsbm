@@ -5,11 +5,14 @@ import os
 import json
 import scipy
 from time import localtime, strftime
-import episcanpy as epi
+#import episcanpy as epi
 import scanpy as sc
 import cloudpickle as pickle
-
-
+import os, time, threading, gc, psutil, sklearn
+from sklearn.model_selection import train_test_split
+import muon as mu
+import scipy.sparse as sp
+import anndata as ad
 
 colors_to_use=[(0.34550725069638827, 0.4203708006658883, 0.9696902293486781),
  (0.9893800026041992, 0.378955911742755, 0.21756841368122667),
@@ -165,3 +168,301 @@ def flat_list(l):
 def most_common(l):
 	l=list(l)
 	return max(set(l), key=l.count)
+
+
+def create_alg(word):
+	return word.split("_")[0]
+		
+def create_data(word):
+	return "_".join(word.split("_")[1:])
+
+def find_best_level(results, ground_truth, label="CellType", method="best", metric="NMI/NMI*"):
+	ok_levels, exps = {}, {}
+	for exp in sorted(set(results["Exp"])):
+		ok_levels[exp] = {}
+		if method=="CT_clusters":
+			for run in range(0,25):
+				exps[exp] = {}
+				for level in [0,1,2,3]:
+					a=results[(results["Level"]==int(level)) & (results["GT"]==label) & (results["Exp"]==exp) & (results["Run"]==run)][["N_clusters"]]
+					if len(a["N_clusters"]) > 0:
+						exps[exp][str(level)]=float(np.abs(a["N_clusters"]-len(set(ground_truth[label].dropna()))))
+				if len(exps[exp]) > 0:
+					ok_levels[exp][run]=np.argmin(pd.DataFrame.from_dict(exps[exp], orient="index").fillna(10000000000))
+		elif method=="best":
+			for run in range(0,25):
+				exps[exp] = {}
+				for level in [0,1,2,3]:
+					a=results[(results["Level"]==int(level)) & (results["GT"]==label) & (results["Exp"]==exp) & (results["Run"]==run)][[metric]]
+					if len(a[metric]) > 0:
+						exps[exp][str(level)]=float(a[metric])
+				if len(exps[exp]) > 0:
+					ok_levels[exp][run]=np.argmax(pd.DataFrame.from_dict(exps[exp], orient="index").fillna(0))			
+	return ok_levels
+
+def create_results(dataset, label, metric="NMI/NMI*"):
+	
+	SBMs=pd.read_csv(f"Datasets/{dataset}/SBM/{dataset}_SBMs_25Run_NMI.tsv.gz", sep="\t", index_col=0)
+	SBMs=SBMs[SBMs["GT"]==label]
+	SBMs["Algorithm"]=[create_alg(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
+	SBMs["Data"]=[create_data(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
+	gt=pd.read_csv(f"Datasets/{dataset}/{dataset}_Metadata.tsv.gz", sep="\t", index_col=0)
+	ok_levels_best=find_best_level(SBMs, gt, label=label, method="best", metric=metric)
+	ok_levels_nc=find_best_level(SBMs, gt, label=label, method="CT_clusters", metric=metric)
+
+
+	SBMs_def_best=pd.DataFrame()
+	for exp in ok_levels_best.keys():
+		for run in ok_levels_best[exp].keys():
+			d=SBMs[(SBMs["Exp"]==exp) & (SBMs["Run"]==run) & (SBMs["Level"]==int(ok_levels_best[exp][run]))]
+			SBMs_def_best=pd.concat([SBMs_def_best, d])
+
+	SBMs_def_ct=pd.DataFrame()
+	for exp in ok_levels_nc.keys():
+		for run in ok_levels_nc[exp].keys():
+			d=SBMs[(SBMs["Exp"]==exp) & (SBMs["Run"]==run) & (SBMs["Level"]==int(ok_levels_nc[exp][run]))]
+			SBMs_def_ct=pd.concat([SBMs_def_ct, d])
+	
+   
+	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_Mowgli_25Run_NMI.tsv.gz", sep="\t", index_col=0)
+	mowgli=mowgli[mowgli["GT"]==label]
+	mowgli["Algorithm"]="Mowgli"
+	mowgli["Data"]=["_".join(mowgli.iloc[i]["Exp"].split("_")[1:]) for i in range(len(mowgli))]	
+
+	if dataset not in ["BMMCCite", "Spleen"]:
+		ShareTopic=pd.read_csv(f"../Datasets/{dataset}/ShareTopic/{dataset}_ShareTopic_25Run_NMI.tsv.gz", sep="\t", index_col=0)
+		ShareTopic=ShareTopic[ShareTopic["GT"]==label]
+		ShareTopic["Algorithm"]="ShareTopic"
+		ShareTopic["Data"]=["_".join(ShareTopic.iloc[i]["Exp"].split("_")[1:]) for i in range(len(ShareTopic))]
+	else:
+		ShareTopic=pd.DataFrame()
+	
+	df_best=pd.concat([SBMs_def_best, ShareTopic, mowgli], axis=0)
+	df_best.reset_index(inplace=True)
+	df_best.drop("index", axis=1, inplace=True)
+	df_best["Data"]=df_best["Data"].replace("_", "+")
+
+	df_ct=pd.concat([SBMs_def_ct, ShareTopic, mowgli], axis=0)
+	df_ct.reset_index(inplace=True)
+	df_ct.drop("index", axis=1, inplace=True)
+	df_ct["Data"]=df_ct["Data"].replace("_", "+")
+
+	return df_best, df_ct
+
+
+def create_results_topics(dataset, exps=None):
+	
+	SBMs=pd.read_csv(f"Datasets/{dataset}/SBM/{dataset}_SBMs_25Run_TopicsSpec.tsv.gz", sep="\t", index_col=0)
+	SBMs["Algorithm"]=[create_alg(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
+	SBMs["Data"]=[create_data(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]   
+  
+	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_Mowgli_25Run_TopicsSpec.tsv.gz", sep="\t", index_col=0)
+	mowgli["Algorithm"]="Mowgli"
+	mowgli["Data"]=["_".join(mowgli.iloc[i]["Exp"].split("_")[1:]) for i in range(len(mowgli))]	
+	mowgli["FS"]="Mixed"
+		
+	if dataset not in ["BMMCCite", "Spleen"]:
+		ShareTopic=pd.read_csv(f"Datasets/{dataset}/ShareTopic/{dataset}_ShareTopic_25Run_TopicsSpec.tsv.gz", sep="\t", index_col=0)
+		ShareTopic["FS"]="Mixed"
+		ShareTopic["Algorithm"]="ShareTopic"
+		ShareTopic["Data"]=["_".join(ShareTopic.iloc[i]["Exp"].split("_")[1:]) for i in range(len(ShareTopic))]
+		if exps is not None:
+			ShareTopic=ShareTopic[ShareTopic["Exp"].isin(exps)]
+			mowgli=mowgli[mowgli["Exp"].isin(exps)]
+			SBMs=SBMs[SBMs["Exp"].isin(exps)]
+	else:
+		ShareTopic=pd.DataFrame()
+		if exps is not None:
+			mowgli=mowgli[mowgli["Exp"].isin(exps)]
+			SBMs=SBMs[SBMs["Exp"].isin(exps)]
+	
+	df=pd.concat([SBMs, ShareTopic, mowgli], axis=0)
+	df.reset_index(inplace=True)
+	df.drop("index", axis=1, inplace=True)
+	df["Data"]=df["Data"].replace("_", "+")
+	
+	return df
+
+
+
+# ---------- Helper: peak RSS (incl. child processes) while a callable runs ----------
+def _rss_now(proc: psutil.Process, include_children: bool = True) -> int:
+	"""Return current RSS in bytes for proc (+ children if include_children)."""
+	rss = 0
+	try:
+		rss = proc.memory_info().rss
+	except psutil.Error:
+		pass
+	if include_children:
+		for c in proc.children(recursive=True):
+			try:
+				rss += c.memory_info().rss
+			except psutil.Error:
+				pass
+	return rss
+
+def run_with_peak_increase(fn, *args, poll_s: float = 0.01, include_children: bool = True, discard_result: bool = False, **kwargs):
+	"""
+	Measure ONLY the function's incremental RAM footprint.
+	Returns: (result_or_None, time_sec, peak_increase_bytes)
+
+	- Baseline is sampled right before starting the thread.
+	- We poll RSS and report max(RSS - baseline).
+	- If discard_result=True, the function's return value is immediately dropped
+	  to avoid counting persistently stored outputs as "algorithmic" usage.
+	"""
+	gc.collect()  # reduce noise from previous work
+	proc = psutil.Process(os.getpid())
+
+	def rss_now():
+		rss = 0
+		try: rss = proc.memory_info().rss
+		except psutil.Error: pass
+		if include_children:
+			for c in proc.children(recursive=True):
+				try: rss += c.memory_info().rss
+				except psutil.Error: pass
+		return rss
+
+	# Baseline: after GC, before the function starts
+	baseline = rss_now()
+	peak_increase = 0
+	done, out, err = False, None, None
+
+	def runner():
+		nonlocal out, err, done
+		try:
+			out = fn(*args, **kwargs)
+		except BaseException as e:
+			err = e
+		finally:
+			done = True
+
+	t = threading.Thread(target=runner)
+	t.start()
+	start = time.time()
+	while not done:
+		inc = rss_now() - baseline
+		if inc > peak_increase:
+			peak_increase = inc
+		time.sleep(poll_s)
+	t.join()
+	elapsed = time.time() - start
+
+	# Final sample in case the last spike is right before return
+	inc = rss_now() - baseline
+	if inc > peak_increase:
+		peak_increase = inc
+
+	if discard_result:
+		# Drop the function's return value so persistent outputs aren't counted
+		out = None
+		gc.collect()
+
+	if err:
+		raise err
+	return out, elapsed, max(0, peak_increase)
+
+
+
+def muon_subsample(mdata, subsample_dict, strata_column, random_state=42):
+	"""
+	Build a new MuData object from scratch to avoid indexing issues
+	Preserves .layers["raw"] if it exists
+	"""
+	np.random.seed(random_state)
+	
+	modality_names = list(mdata.mod.keys())
+	
+	print(f"Original data: {mdata.n_obs} cells")
+	
+	# Step 1: Cell subsampling FIRST
+	if 'cells' in subsample_dict and subsample_dict['cells'] is not None:
+		n_cells = subsample_dict['cells']
+		
+		print(f"Step 1: Subsampling to {n_cells} cells...")
+		
+		if strata_column in mdata.obs.columns:
+			strata_labels = mdata.obs[strata_column]
+		else:
+			strata_labels = mdata[modality_names[0]].obs[strata_column]
+		
+		try:
+			_, cell_indices = train_test_split(
+				np.arange(mdata.n_obs),
+				test_size=n_cells,
+				stratify=strata_labels,
+				random_state=random_state
+			)
+			# Create a new MuData with subsampled cells
+			mod_dict = {}
+			for mod in modality_names:
+				mod_data = mdata[mod][cell_indices].copy()
+				mod_dict[mod] = mod_data
+			mdata_subsampled = mu.MuData(mod_dict)
+		except ValueError as e:
+			print(f"Stratified sampling failed: {e}")
+			print("Falling back to random sampling...")
+			cell_indices = np.random.choice(mdata.n_obs, n_cells, replace=False)
+			mod_dict = {}
+			for mod in modality_names:
+				mod_data = mdata[mod][cell_indices].copy()
+				mod_dict[mod] = mod_data
+			mdata_subsampled = mu.MuData(mod_dict)
+	else:
+		print("Step 1: No cell subsampling requested")
+		mdata_subsampled = mdata.copy()
+	
+	print(f"After cell subsampling: {mdata_subsampled.n_obs} cells")
+	
+	# Step 2: Feature subsampling
+	print("Step 2: Feature subsampling...")
+	for modality in modality_names:
+		if modality in subsample_dict and subsample_dict[modality] is not None:
+			n_features = subsample_dict[modality]
+			mod_data = mdata_subsampled[modality]
+			
+			if n_features < mod_data.n_vars:
+				feature_indices = np.random.choice(mod_data.n_vars, n_features, replace=False)
+				
+				# Create a completely new AnnData object preserving layers
+				new_X = mod_data.X[:, feature_indices]
+				new_var = mod_data.var.iloc[feature_indices].copy()
+				
+				# Copy all layers, subsampling the "raw" layer if it exists
+				new_layers = {}
+				for layer_name in mod_data.layers.keys():
+					if layer_name == "raw":
+						new_layers["raw"] = mod_data.layers["raw"][:, feature_indices]
+					else:
+						new_layers[layer_name] = mod_data.layers[layer_name][:, feature_indices]
+				
+				new_adata = ad.AnnData(
+					X=new_X,
+					obs=mod_data.obs.copy(),
+					var=new_var,
+					obsm=mod_data.obsm.copy(),
+					varm=mod_data.varm.copy() if hasattr(mod_data, 'varm') else {},
+					uns=mod_data.uns.copy(),
+					layers=new_layers
+				)
+				mdata_subsampled.mod[modality] = new_adata
+				print(f"  {modality}: {n_features} features (preserved raw layer)")
+			else:
+				print(f"  {modality}: {mod_data.n_vars} features (no subsampling)")
+		else:
+			n_current = mdata_subsampled[modality].n_vars
+			print(f"  {modality}: {n_current} features (no specification)")
+#	for mod in mdata_subsampled.mod.keys():
+#		total_counts = np.array(mdata_subsampled[mod].X.sum(axis=1)).flatten()
+		
+		# Find cells with zero counts
+#		zero_count_cells = total_counts == 0
+#		zero_count_indices = np.where(zero_count_cells)[0]
+#		
+#		print(f"{mod} --> Total cells: {mdata_subsampled[mod].n_obs}")
+#		print(f"{mod} --> Cells with zero counts: {np.sum(zero_count_cells)}")
+#		print(f"{mod} -->  Indices of zero-count cells: {zero_count_indices}")
+
+	return mdata_subsampled
+

@@ -37,6 +37,8 @@ print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), "Reading AnnData
 mdata=mu.read_h5mu(cm)
 key1=list(mdata.mod.keys())[0]
 key2=list(mdata.mod.keys())[1]
+mdata[key1].X=mdata[key1].layers["raw"].copy()
+mdata[key2].X=mdata[key2].layers["raw"].copy()
 
 gamma=1
 tau=0.5
