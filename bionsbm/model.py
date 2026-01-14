@@ -52,7 +52,8 @@ class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", load_graph_path=None, save_graph_path=None):
+	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", 
+				load_graph_path=None, save_graph_path=None, annotate_input_object=False):
 		"""
 		Initialize a bionsbm self.
 
@@ -72,7 +73,7 @@ class bionsbm():
 		modality : str, default="Mod1"
 			Name of the modality to use when the input is `AnnData`.
 		saving_path : str, default="results/myself"
-			Base path for saving self outputs (graph, state, results).
+			Base path for saving model outputs (graph, state, results).
 
 		Notes
 		-----
@@ -90,6 +91,7 @@ class bionsbm():
 		self.saving_path = saving_path
 		self.load_graph_path = load_graph_path
 		self.save_graph_path = save_graph_path
+		self.annotate_input_object = annotate_input_object
 
 		if load_graph_path is not None:
 			logger.info(f"Loading graph from {load_graph_path}")
@@ -272,16 +274,16 @@ class bionsbm():
 
 	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
 		"""
-		Fit a nested stochastic block self to the graph using `minimize_nested_blockmodel_dl`.
+		Fit a nested stochastic block model to the graph using `minimize_nested_blockmodel_dl`.
 	
-		This method performs multiple initializations and keeps the best self 
+		This method performs multiple initializations and keeps the best model 
 		based on the minimum description length (entropy). It supports degree-corrected 
 		and overlapping block selfs, and can perform parallel moves for efficiency.
 	
 		Parameters
 		----------
 		n_init : int, default=1
-			Number of random initializations. The self with the lowest entropy is retained.
+			Number of random initializations. The model with the lowest entropy is retained.
 		verbose : bool, default=True
 			If True, print progress messages.
 		deg_corr : bool, default=True
@@ -338,8 +340,9 @@ class bionsbm():
 		logger.info("Saving data in %s", self.saving_path)
 		self.save_data()
 
-		logger.info("Annotate object")
-		self.annotate_obj()
+		if self.annotate_input_object:
+			logger.info("Annotate object")
+			self.annotate_obj()
 
 
 	# Helper functions
@@ -570,7 +573,7 @@ class bionsbm():
 		Parameters
 		----------
 		l : int
-			The level index to save. Must be within the range of available self levels.
+			The level index to save. Must be within the range of available model levels.
 		saving in self.saving_path_path : str
 			Base path (folder + prefix) where files will be written.
 			Example: "results/myself" → files like:
@@ -657,9 +660,9 @@ class bionsbm():
 		-----
 		- The parent folder is created automatically if it does not exist.
 		- Level saving is parallelized with threads for efficiency in I/O.
-		- By default, at most self.max_depth levels are saved, or fewer if the self has <self.max_depth levels.
+		- By default, at most self.max_depth levels are saved, or fewer if the model has <self.max_depth levels.
 		"""
-		logger.info("Saving self data to %s", self.saving_path)
+		logger.info("Saving model data to %s", self.saving_path)
 
 		L = min(len(self.state.levels), self.max_depth)
 		self.L = L
@@ -682,7 +685,7 @@ class bionsbm():
 
 		except Exception as e:
 			logger.error("Failed to save global files: %s", e)
-			raise RuntimeError(f"Failed to save global files for self '{self.saving_path}': {e}") from e
+			raise RuntimeError(f"Failed to save global files for model '{self.saving_path}': {e}") from e
 
 
 		errors = []
@@ -742,16 +745,16 @@ class bionsbm():
 
 	def dump_model(self, filename="bionsbm.pkl"):
 		"""
-		Dump self using pickle
+		Dump model using pickle
 
 		"""
-		logger.info("Dumping self to %s", filename)
+		logger.info("Dumping model to %s", filename)
 
 		with open(filename, 'wb') as f:
 			pickle.dump(self, f)
 
 	def load_model(self, filename="bionsbm.pkl"):
-		logger.info("Loading self from %s", filename)
+		logger.info("Loading model from %s", filename)
 
 		with open(filename, "rb") as f:
 			self = pickle.load(f)
