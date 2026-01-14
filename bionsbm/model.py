@@ -177,7 +177,7 @@ class bionsbm():
 		if self.save_graph_path is not None:
 			folder = os.path.dirname(self.saving_path)
 			Path(folder).mkdir(parents=True, exist_ok=True)
-			self.save_graph(filename=f"{self.save_graph_path}_graph.xml.gz")
+			self.save_graph(filename=self.save_graph_path)
 
 
 	def make_graph_single(self, df: pd.DataFrame, get_kind) -> None:
