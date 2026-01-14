@@ -365,7 +365,6 @@ class bionsbm():
 		filename : str, optional
 			Path to the saved graph file (default: "graph.xml.gz").
 		"""
-		logger.info("Loading graph from %s", filename)
 
 		self.g = load_graph(filename)
 		self.documents = [self.g.vp['name'][v] for v in self.g.vertices() if self.g.vp['kind'][v] == 0]
@@ -706,7 +705,7 @@ class bionsbm():
 
 	def annotate_obj(self) -> None:
 		L = min(len(self.state.levels), self.max_depth)
-		for l in range(0,L):
+		for l in range(0, L):
 			main_feature = self.modalities[0]
 			data = self.get_groups(l)
 			self.obj.obs[f"Level_{l}_cluster"]=np.argmax(pd.DataFrame(data=data["p_td_d"], columns=self.documents)[self.obj.obs.index], axis=0).astype(str)
