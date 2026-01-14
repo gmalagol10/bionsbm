@@ -85,7 +85,7 @@ class bionsbm():
 		super().__init__()
 		self.keywords: List = []
 		self.nbranches: int = 1
-		self.modalities: List[str] = []
+		self.modalities: List[str] = list(obj.mod.keys()) if isinstance(obj, MuData) else [modality]
 		self.max_depth: int = max_depth
 		self.obj: Any = obj
 		self.saving_path = saving_path
@@ -98,12 +98,10 @@ class bionsbm():
 			self.load_graph(filename=load_graph_path)
 		else:
 			if isinstance(obj, MuData):
-				self.modalities=list(obj.mod.keys())   
 				dfs=[obj[key].to_df().T for key in self.modalities]
 				self.make_graph(dfs[0], dfs[1:])
 
 			elif isinstance(obj, AnnData):
-				self.modalities=[modality]
 				self.make_graph(obj.to_df().T, [])
 
 		if label:
