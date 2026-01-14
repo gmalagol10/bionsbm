@@ -85,7 +85,7 @@ class bionsbm():
 		super().__init__()
 		self.keywords: List = []
 		self.nbranches: int = 1
-		self.modalities: List[str] = list(obj.mod.keys())
+		self.modalities: List[str] = list(obj.mod.keys()) if isinstance(obj, MuData) else [obj.uns["Mod"]]
 		self.max_depth: int = max_depth
 		self.obj: Any = obj
 		self.saving_path = saving_path
