@@ -92,6 +92,7 @@ class bionsbm():
 		self.save_graph_path = save_graph_path
 
 		if load_graph_path is not None:
+			logger.info(f"Loading graph from {load_graph_path}")
 			self.load_graph(filename=load_graph_path)
 		else:
 			if isinstance(obj, MuData):
