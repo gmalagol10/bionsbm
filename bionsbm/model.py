@@ -52,7 +52,7 @@ class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", load_if_exists=None):
+	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", load_graph_path=None, save_graph_path=None):
 		"""
 		Initialize a bionsbm self.
 
@@ -87,17 +87,20 @@ class bionsbm():
 		self.modalities: List[str] = []
 		self.max_depth: int = max_depth
 		self.obj: Any = obj
-		self.saving_path: str = saving_path
-		self.load_if_exists = load_if_exists
+		self.load_graph_path = load_graph_path
+		self.save_graph_path = save_graph_path
 
-		if isinstance(obj, MuData):
-			self.modalities=list(obj.mod.keys())   
-			dfs=[obj[key].to_df().T for key in self.modalities]
-			self.make_graph(dfs[0], dfs[1:])
+		if load_graph_path is not None:
+			self.load_graph(filename=load_graph_path)
+		else:
+			if isinstance(obj, MuData):
+				self.modalities=list(obj.mod.keys())   
+				dfs=[obj[key].to_df().T for key in self.modalities]
+				self.make_graph(dfs[0], dfs[1:])
 
-		elif isinstance(obj, AnnData):
-			self.modalities=[modality]
-			self.make_graph(obj.to_df().T, [])
+			elif isinstance(obj, AnnData):
+				self.modalities=[modality]
+				self.make_graph(obj.to_df().T, [])
 
 		if label:
 			g_raw=self.g.copy()
@@ -113,6 +116,7 @@ class bionsbm():
 				types[key]=[int(i+np.max(docs_type)+1) for a in range(0, obj[key].shape[0])]
 			node_type = g_raw.new_vertex_property('int', functools.reduce(lambda a, b : a+b, list(types.values())))
 			self.g = g_raw.copy()
+			del g_raw
 		else:
 			node_type=None
 		self.node_type=node_type 
@@ -153,28 +157,26 @@ class bionsbm():
 			If ``df`` and ``df_keyword_list`` cannot be aligned properly
 			(e.g., inconsistent columns).
 		"""
-		if os.path.isfile(f"{self.saving_path}_graph.xml.gz") == True and self.load_if_exists == True: 
-			self.load_graph(filename=f"{self.saving_path}_graph.xml.gz")
 
-		else:  
-			logger.info("Creating graph from multiple DataFrames")
-			df_all = df.copy(deep =True)
-			for ikey,df_keyword in enumerate(df_keyword_list):
-				df_keyword = df_keyword.reindex(columns=df.columns)
-				df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
-				df_keyword["kind"] = ikey+2
-				df_all = pd.concat((df_all,df_keyword), axis=0)
-   
-			def get_kind(word):
-				return 1 if word in df.index else df_all.at[word,"kind"]
-   
-			self.nbranches = len(df_keyword_list)
-		   
-			self.make_graph_single(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
+		logger.info("Creating graph from multiple DataFrames")
+		df_all = df.copy(deep=True)
+		for ikey,df_keyword in enumerate(df_keyword_list):
+			df_keyword = df_keyword.reindex(columns=df.columns)
+			df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
+			df_keyword["kind"] = ikey+2
+			df_all = pd.concat((df_all,df_keyword), axis=0)
 
+		def get_kind(word):
+			return 1 if word in df.index else df_all.at[word,"kind"]
+
+		self.nbranches = len(df_keyword_list)
+	   
+		self.make_graph_single(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
+
+		if self.save_graph_path is not None:
 			folder = os.path.dirname(self.saving_path)
 			Path(folder).mkdir(parents=True, exist_ok=True)
-			self.save_graph(filename=f"{self.saving_path}_graph.xml.gz")
+			self.save_graph(filename=f"{self.save_graph_path}_graph.xml.gz")
 
 
 	def make_graph_single(self, df: pd.DataFrame, get_kind) -> None:
