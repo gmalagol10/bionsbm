@@ -52,7 +52,7 @@ class bionsbm():
 	"""
 	Class to run bionsbm
 	"""
-	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, modality: str = "Mod1", saving_path: str = "results/myself", 
+	def __init__(self, obj, label: Optional[str] = None, max_depth: int = 6, saving_path: str = "results/myself", 
 				load_graph_path=None, save_graph_path=None, annotate_input_object=False):
 		"""
 		Initialize a bionsbm self.
