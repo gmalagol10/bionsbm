@@ -87,6 +87,7 @@ class bionsbm():
 		self.modalities: List[str] = []
 		self.max_depth: int = max_depth
 		self.obj: Any = obj
+		self.saving_path = saving_path
 		self.load_graph_path = load_graph_path
 		self.save_graph_path = save_graph_path
 
