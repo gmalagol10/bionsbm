@@ -43,8 +43,8 @@ mdata=mu.MuData(adatas)
 del adatas
 
 h_regularization={mod : 5e-2 for mod in list(mdata.mod.keys())}
-for latent_dim in [24]:
-	for run in range(2, 5):
+for latent_dim in [2,6,12,18,24]:
+	for run in range(0, 5):
 		print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Latent dim {latent_dim} Run {run}/5", flush=True)
 		model = mowgli.models.MowgliModel(latent_dim=latent_dim, h_regularization=h_regularization)
 

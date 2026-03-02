@@ -12,7 +12,7 @@ mdata
 sizes=np.linspace(500, mdata.shape[0], 10).astype(int)
 
 def run_bionsbm(obj):
-	model = bionsbm.model.bionsbm(obj=obj, load_if_exists=False)
+	model = bionsbm.model.bionsbm(obj=obj)
 	model.fit(n_init=1, verbose=False)
 	os.system("rm -rf results")
 
@@ -34,7 +34,6 @@ for n_cells in sizes:
 	df = pd.DataFrame(rows)
 	df.to_csv("Tables/Time_bionSBM_cells.tsv", sep="\t", index=False)
 	print("Saved: Tables/Time_bionSBM_cells.tsv", flush=True)
-
 
 
 rows=[]

@@ -202,9 +202,10 @@ def find_best_level(results, ground_truth, label="CellType", method="best", metr
 
 def create_results(dataset, label, metric="NMI/NMI*"):
 	
-	SBMs=pd.read_csv(f"Datasets/{dataset}/SBM/{dataset}_SBMs_25Run_NMI.tsv.gz", sep="\t", index_col=0)
+	SBMs=pd.read_csv(f"Datasets/{dataset}/bionSBM/{dataset}_NMI.tsv.gz", sep="\t", index_col=0)
+	SBMs["NMI/NMI*"]=SBMs["NMI"]/SBMs["NMI*"]
 	SBMs=SBMs[SBMs["GT"]==label]
-	SBMs["Algorithm"]=[create_alg(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
+	SBMs["Algorithm"]="bionSBM"
 	SBMs["Data"]=[create_data(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
 	gt=pd.read_csv(f"Datasets/{dataset}/{dataset}_Metadata.tsv.gz", sep="\t", index_col=0)
 	ok_levels_best=find_best_level(SBMs, gt, label=label, method="best", metric=metric)
@@ -224,13 +225,16 @@ def create_results(dataset, label, metric="NMI/NMI*"):
 			SBMs_def_ct=pd.concat([SBMs_def_ct, d])
 	
    
-	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_Mowgli_25Run_NMI.tsv.gz", sep="\t", index_col=0)
+	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_NMI_Silhouette.tsv.gz", sep="\t", index_col=0)
+	mowgli["NMI/NMI*"]=mowgli["NMI"]/mowgli["NMI*"]
+
 	mowgli=mowgli[mowgli["GT"]==label]
 	mowgli["Algorithm"]="Mowgli"
 	mowgli["Data"]=["_".join(mowgli.iloc[i]["Exp"].split("_")[1:]) for i in range(len(mowgli))]	
 
 	if dataset not in ["BMMCCite", "Spleen"]:
-		ShareTopic=pd.read_csv(f"../Datasets/{dataset}/ShareTopic/{dataset}_ShareTopic_25Run_NMI.tsv.gz", sep="\t", index_col=0)
+		ShareTopic=pd.read_csv(f"Datasets/{dataset}/ShareTopic/{dataset}_NMI_Silhouette.tsv.gz", sep="\t", index_col=0)
+		ShareTopic["NMI/NMI*"]=ShareTopic["NMI"]/ShareTopic["NMI*"]
 		ShareTopic=ShareTopic[ShareTopic["GT"]==label]
 		ShareTopic["Algorithm"]="ShareTopic"
 		ShareTopic["Data"]=["_".join(ShareTopic.iloc[i]["Exp"].split("_")[1:]) for i in range(len(ShareTopic))]
@@ -249,20 +253,19 @@ def create_results(dataset, label, metric="NMI/NMI*"):
 
 	return df_best, df_ct
 
-
 def create_results_topics(dataset, exps=None):
 	
-	SBMs=pd.read_csv(f"Datasets/{dataset}/SBM/{dataset}_SBMs_25Run_TopicsSpec.tsv.gz", sep="\t", index_col=0)
-	SBMs["Algorithm"]=[create_alg(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
+	SBMs=pd.read_csv(f"Datasets/{dataset}/bionSBM/{dataset}_bionSBM_TopicsSpecDist.tsv.gz", sep="\t", index_col=0)
+	SBMs["Algorithm"]="bionSBM"
 	SBMs["Data"]=[create_data(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]   
   
-	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_Mowgli_25Run_TopicsSpec.tsv.gz", sep="\t", index_col=0)
+	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_Mowgli_TopicsSpecDist.tsv.gz", sep="\t", index_col=0)
 	mowgli["Algorithm"]="Mowgli"
 	mowgli["Data"]=["_".join(mowgli.iloc[i]["Exp"].split("_")[1:]) for i in range(len(mowgli))]	
 	mowgli["FS"]="Mixed"
 		
 	if dataset not in ["BMMCCite", "Spleen"]:
-		ShareTopic=pd.read_csv(f"Datasets/{dataset}/ShareTopic/{dataset}_ShareTopic_25Run_TopicsSpec.tsv.gz", sep="\t", index_col=0)
+		ShareTopic=pd.read_csv(f"Datasets/{dataset}/ShareTopic/{dataset}_ShareTopic_TopicsSpecDist.tsv.gz", sep="\t", index_col=0)
 		ShareTopic["FS"]="Mixed"
 		ShareTopic["Algorithm"]="ShareTopic"
 		ShareTopic["Data"]=["_".join(ShareTopic.iloc[i]["Exp"].split("_")[1:]) for i in range(len(ShareTopic))]

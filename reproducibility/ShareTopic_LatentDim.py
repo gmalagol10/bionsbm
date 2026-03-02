@@ -47,7 +47,7 @@ batch_size=50
 beta=0.1
 
 for latent_dim in [2,6,12,18,24]:
-	for run in range(0, 10):
+	for run in range(0, 5):
 		print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Latent dim {latent_dim} Run {run}/5", flush=True)
 
 		Path(f"{folder}/LatentDim/LT_{latent_dim}/Run{run}").mkdir(parents=True, exist_ok=True)

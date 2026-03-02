@@ -14,15 +14,16 @@ import os
 from pathlib import Path
 
 if torch.cuda.is_available():
-    device='cuda'
+	device='cuda'
 else:
-    device='cpu'
+	device='cpu'
 print(f'Running on: {device}')
 
 print(f"Mowgli script started at:", time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), flush=True)
 
 cm=sys.argv[1]
 path_to_save=sys.argv[2]
+start = int(sys.argv[3])
 
 folder=os.path.dirname(path_to_save)
 name=path_to_save.split("/")[-1]
@@ -36,22 +37,27 @@ print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Reading count 
 mdata=mu.read_h5mu(cm)
 adatas={}
 for mod in mdata.mod:
-    adata=mdata[mod].copy()
-    adata.X=adata.X.toarray().copy()
-    adatas[mod]=adata
+	adata=mdata[mod].copy()
+	adata.X=adata.X.toarray().copy()
+	adatas[mod]=adata
+	adata.var["highly_variable"]=True
 mdata=mu.MuData(adatas)
 del adatas
 
 h_regularization={mod : 5e-2 for mod in list(mdata.mod.keys())}
 
-for run in range(0, 10):
-	print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Run {run}/{runs}", flush=True)
+for run in range(start, 25):
+	print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Run {run}/25", flush=True)
 	model = mowgli.models.MowgliModel(latent_dim=len(set(mdata.obs[f"{mod}:CellType"].dropna())), h_regularization=h_regularization)
 
-	print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Run {run}/{runs} Fitting Mowgli model", flush=True)
+	print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Run {run}/25 Fitting Mowgli model", flush=True)
 	model.train(mdata, device=device)
 
-	print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Run {run}/{runs} Saving results", flush=True)
+	print(time.strftime("%a, %d %b %Y %H:%M:%S", time.localtime()), f"Run {run}/25 Saving results", flush=True)
 	Path(f"{folder}/Runs/Run{run}").mkdir(parents=True, exist_ok=True)
 	embeddding=pd.DataFrame(mdata.obsm["W_OT"].T, columns=mdata.obs.index, index=[f"Dim_{i}" for i in range(0, model.latent_dim)])
 	embeddding.to_csv(f"{folder}/Runs/Run{run}/{name}_Embedding.tsv.gz", compression="gzip", sep="\t")
+	
+	for mod in mdata.mod.keys():
+		d=pd.DataFrame(mdata[mod].uns["H_OT"], index=list(mdata[mod].var.index), columns=[f"Dim_{i}" for i in range(0, model.latent_dim)])
+		d.to_csv(f"{folder}/Runs/Run{run}/{name}_{mod}_Topic.tsv.gz", compression="gzip", sep="\t")
