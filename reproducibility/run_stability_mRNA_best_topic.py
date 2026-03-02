@@ -145,10 +145,6 @@ def dominant_topic_stability(Z_list, TD_list):
     return np.nan if len(sims) == 0 else np.mean(sims)
 
 
-# ============================================================
-# Run stability (diagonal only)
-# ============================================================
-
 outdir = f"Datasets/{dataset}/bionSBM"
 os.makedirs(outdir, exist_ok=True)
 
