@@ -17,11 +17,7 @@ main_fs = "Peak" if dataset not in ["BMMCCite", "Spleen"] else "ADT"
 print(f"Dataset: {dataset} | Main FS: {main_fs} | top-k = {k}", flush=True)
 
 # experiments
-order = [
-    "mRNA",
-    "mRNA_lncRNA",
-    f"{main_fs}_mRNA",
-    f"{main_fs}_mRNA_lncRNA"]
+order = ["mRNA", "mRNA_lncRNA", f"{main_fs}_mRNA", f"{main_fs}_mRNA_lncRNA"]
 
 # ============================================================
 # Utilities
