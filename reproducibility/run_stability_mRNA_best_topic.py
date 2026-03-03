@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 from itertools import combinations
+from scipy.spatial.distance import jensenshannon
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ============================================================
@@ -17,21 +18,30 @@ main_fs = "Peak" if dataset not in ["BMMCCite", "Spleen"] else "ADT"
 print(f"Dataset: {dataset} | Main FS: {main_fs} | top-k = {k}", flush=True)
 
 # experiments
-order = ["mRNA", "mRNA_lncRNA", f"{main_fs}_mRNA", f"{main_fs}_mRNA_lncRNA"]
+order = [
+    "mRNA",
+    "mRNA_lncRNA",
+    f"{main_fs}_mRNA",
+    f"{main_fs}_mRNA_lncRNA"]
 
 # ============================================================
 # Utilities
 # ============================================================
 
-def pdf_similarity(p, q):
+def pdf_similarity(p, q, metric):
     p = np.nan_to_num(p, nan=0.0)
     q = np.nan_to_num(q, nan=0.0)
 
     if p.sum() > 0: p = p / p.sum()
     if q.sum() > 0: q = q / q.sum()
 
-    return cosine_similarity(p[None], q[None])[0, 0]
- 
+    if metric == "js":
+        return 1.0 - jensenshannon(p, q)
+    elif metric == "cosine":
+        return cosine_similarity(p[None], q[None])[0, 0]
+    else:
+        raise ValueError("metric must be 'js' or 'cosine'")
+
 # ============================================================
 # Load metadata
 # ============================================================
@@ -100,7 +110,7 @@ for run in range(n_runs):
 # Dominant topic stability per cell type
 # ============================================================
 
-def dominant_topic_stability(Z_list, TD_list):
+def dominant_topic_stability(Z_list, TD_list, metric):
     sims = []
 
     for ct in celltypes.unique():
@@ -134,7 +144,7 @@ def dominant_topic_stability(Z_list, TD_list):
         for i, j in combinations(range(len(run_topics)), 2):
 
             sims_ij = [
-                pdf_similarity(v1, v2)
+                pdf_similarity(v1, v2, metric)
                 for v1 in run_topics[i]
                 for v2 in run_topics[j]
             ]
@@ -145,17 +155,26 @@ def dominant_topic_stability(Z_list, TD_list):
     return np.nan if len(sims) == 0 else np.mean(sims)
 
 
+# ============================================================
+# Run stability (diagonal only)
+# ============================================================
+
 outdir = f"Datasets/{dataset}/bionSBM"
 os.makedirs(outdir, exist_ok=True)
 
+for metric in ["js", "cosine"]:
 
-rows = []
+    rows = []
 
-for fs in order:
-    score = dominant_topic_stability(Z_runs[fs],TD_runs[fs])
-    rows.append((fs, score))
+    for fs in order:
+        score = dominant_topic_stability(Z_runs[fs],TD_runs[fs],metric)
+        rows.append((fs, score))
 
-res = pd.DataFrame(rows, columns=["Experiment", "Stability"])
-res.to_csv(f"{outdir}/DominantTopicStability_top{k}_cosine_mRNA.tsv", sep="\t", index=False)
+    res = pd.DataFrame(rows, columns=["Experiment", "Stability"])
+    res.to_csv(
+        f"{outdir}/DominantTopicStability_top{k}_{metric}_mRNA.tsv",
+        sep="\t",
+        index=False
+    )
 
 print("Done.")
