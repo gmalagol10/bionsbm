@@ -6,7 +6,7 @@ Gabriele Malagoli, Filippo Valle, Andreina Tirabassi, Annalisa Marsico, Loredana
 
 https://doi.org/10.64898/2026.02.25.707947
 
-![alt text](https://github.com/gmalagol10/bionsbm/blob/main/bionsbm/bionSBM_Fig1.png?raw=true)
+
 
 ## Installation
 
