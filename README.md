@@ -1,5 +1,4 @@
 # bionSBM
-### bio- Stochastic Block Models
 
 Integration of single-cell multi-omic data with graph-based topic modelling
 
