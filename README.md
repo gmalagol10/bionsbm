@@ -1,5 +1,13 @@
-# bionsbm
-### Graph-based topic modelling for the integration single-cell multi-omica data
+# bionSBM
+### bio- Stochastic Block Models
+
+Integration of single-cell multi-omic data with graph-based topic modelling
+
+Gabriele Malagoli, Filippo Valle, Andreina Tirabassi, Annalisa Marsico, Loredana Martignetti, Michele Caselle & Maria Colomé-Tatché
+
+https://doi.org/10.64898/2026.02.25.707947
+
+![alt text](https://github.com/gmalagol10/bionsbm/blob/main/bionsbm/bionSBM_Fig1.png?raw=true)
 
 ## Installation
 
