@@ -74,7 +74,6 @@ class bionsbm():
 			Name of the modality to use when the input is `AnnData`.
 		saving_path : str, default="results/myself"
 			Base path for saving model outputs (graph, state, results).
-
 		Notes
 		-----
 		- For `MuData`, multiple modalities are combined into a multi-branch graph.
@@ -97,12 +96,7 @@ class bionsbm():
 			logger.info(f"Loading graph from {load_graph_path}")
 			self.load_graph(filename=load_graph_path)
 		else:
-			if isinstance(obj, MuData):
-				dfs=[obj[key].to_df().T for key in self.modalities]
-				self.make_graph(dfs[0], dfs[1:])
-
-			elif isinstance(obj, AnnData):
-				self.make_graph(obj.to_df().T, [])
+			self.make_graph(obj)
 
 		if label:
 			g_raw=self.g.copy()
@@ -124,150 +118,94 @@ class bionsbm():
 		self.node_type=node_type 
 
 		
-	def make_graph(self, df: pd.DataFrame, df_keyword_list: List[pd.DataFrame]) -> None:
+
+	def make_graph(self, obj: Optional[Any] = None) -> None:
 		"""
-		Build a heterogeneous graph from a main feature DataFrame and optional keyword/meta-feature DataFrames.
+		Build the heterogeneous graph directly from AnnData/MuData matrices.
 
-		This function constructs a bipartite (documents–words) or multi-branch
-		graph (documents–words–keywords/meta-features) using the input matrices.
-		If a cached graph file exists at ``self.saving_path``, it is loaded directly
-		instead of rebuilding.
-
-		Parameters
-		----------
-		df : pandas.DataFrame
-			Main feature matrix with words/features as rows (index) and
-			documents/samples as columns.
-		df_keyword_list : list of pandas.DataFrame
-			List of additional matrices (e.g., keywords, annotations, or meta-features).
-			Each DataFrame must have the same columns as ``df`` (documents),
-			and its rows will be treated as a separate feature branch.
-
-		Notes
-		-----
-		- Each branch is assigned a unique ``kind`` index:
-		  * 0 → documents
-		  * 1 → main features (e.g., words/genes)
-		  * 2, 3, ... → subsequent keyword/meta-feature branches
-		- If a saved graph already exists at
-		  ``{self.saving_path}_graph.xml.gz``, it will be loaded instead of recreated.
-		- After graph construction, the graph is saved to disk in Graph-Tool format.
-
-		Raises
-		------
-		ValueError
-			If ``df`` and ``df_keyword_list`` cannot be aligned properly
-			(e.g., inconsistent columns).
+		Sparse inputs are processed from ``.X`` without conversion to dense pandas
+		DataFrames. Documents occupy the first vertex block and each modality gets
+		a contiguous feature block. Only positive integer-weight edges are inserted.
 		"""
+		obj = self.obj if obj is None else obj
+		if isinstance(obj, MuData):
+			adatas = [obj[key] for key in self.modalities]
+		elif isinstance(obj, AnnData):
+			adatas = [obj]
+		else:
+			raise TypeError("make_graph expects an AnnData or MuData object")
 
-		logger.info("Creating graph from multiple DataFrames")
-		df_all = df.copy(deep=True)
-		for ikey,df_keyword in enumerate(df_keyword_list):
-			df_keyword = df_keyword.reindex(columns=df.columns)
-			df_keyword.index = ["".join(["#" for _ in range(ikey+1)])+str(keyword) for keyword in df_keyword.index]
-			df_keyword["kind"] = ikey+2
-			df_all = pd.concat((df_all,df_keyword), axis=0)
+		documents = pd.Index(adatas[0].obs_names)
+		D = len(documents)
+		sizes = np.array([adata.n_vars for adata in adatas], dtype=np.int64)
+		offsets = D + np.r_[0, np.cumsum(sizes[:-1])]
+		self.nbranches = len(adatas) - 1
 
-		def get_kind(word):
-			return 1 if word in df.index else df_all.at[word,"kind"]
-
-		self.nbranches = len(df_keyword_list)
-	   
-		self.make_graph_single(df_all.drop("kind", axis=1, errors='ignore'), get_kind)
-
-		if self.save_graph_path is not None:
-			folder = os.path.dirname(self.saving_path)
-			Path(folder).mkdir(parents=True, exist_ok=True)
-			self.save_graph(filename=self.save_graph_path)
-
-
-	def make_graph_single(self, df: pd.DataFrame, get_kind) -> None:
-
-		"""
-		Construct a graph-tool graph from a single feature matrix.
-
-		This method builds a bipartite or multi-branch graph from the given
-		DataFrame, where columns represent documents/samples and rows represent
-		features (e.g., words, genes, or keywords). Vertices are created for
-		both documents and features, and weighted edges connect documents to
-		their features.
-
-		Parameters
-		----------
-		df : pandas.DataFrame
-			Feature matrix with rows as features (words, genes, or keywords)
-			and columns as documents/samples. The values must be numeric and
-			represent counts or weights of feature occurrences.
-		get_kind : callable
-			Function that takes a feature name (row index from ``df``) and
-			returns an integer specifying the vertex kind:
-			- 0 → document nodes
-			- 1 → main feature nodes
-			- 2, 3, ... → keyword/meta-feature branch nodes
-
-		Notes
-		-----
-		- The constructed graph is undirected.
-		- Vertices are annotated with two properties:
-		  * ``name`` (string): document or feature name.
-		  * ``kind`` (int): node type (document, word, or keyword branch).
-		- Edges are annotated with ``count`` (int), representing the weight.
-		- Edges with zero weight are removed after construction.
-		- The graph is stored in ``self.g``
-
-		Raises
-		------
-		ValueError
-			If the resulting graph has no edges (i.e., ``df`` is empty or contains only zeros).	
-		"""
-		
-		logger.info("Building graph with %d docs and %d words", df.shape[1], df.shape[0])
+		logger.info("Building sparse graph with %d docs and %d feature branches", D, len(adatas))
 		self.g = Graph(directed=False)
+		self.g.add_vertex(int(D + sizes.sum()))
 
-		n_docs, n_words = df.shape[1], df.shape[0]
-	
-		# Add all vertices first
-		self.g.add_vertex(n_docs + n_words)
-	
-		# Create vertex properties
-		name = self.g.new_vp("string")
-		kind = self.g.new_vp("int")
-		self.g.vp["name"] = name
-		self.g.vp["kind"] = kind
-	
-		# Assign doc vertices (loop for names, array for kind)
-		for i, doc in enumerate(df.columns):
-			name[self.g.vertex(i)] = doc
-		kind.get_array()[:n_docs] = 0
-	
-		# Assign word vertices (loop for names, array for kind)
-		for j, word in enumerate(df.index):
-			name[self.g.vertex(n_docs + j)] = word
-		kind.get_array()[n_docs:] = np.array([get_kind(w) for w in df.index], dtype=int)
-	
-		# Edge weights
-		weight = self.g.new_ep("int")
-		self.g.ep["count"] = weight
-	
-		# Build sparse edges
-		rows, cols = df.values.nonzero()
-		vals = df.values[rows, cols].astype(int)
-		edges = [(c, n_docs + r, v) for r, c, v in zip(rows, cols, vals)]
-		if len(edges)==0: raise ValueError("Empty graph")
-	
-		self.g.add_edge_list(edges, eprops=[weight])
-	
-		# Remove edges with 0 weight
-		filter_edges = self.g.new_edge_property("bool")
-		filter_edges.a = weight.a > 0
-		self.g.set_edge_filter(filter_edges)
-		self.g.purge_edges()
-		self.g.clear_filters()
-	
-		self.documents = df.columns
-		self.words = df.index[self.g.vp['kind'].a[n_docs:] == 1]
-		for ik in range(2, 2 + self.nbranches):
-			self.keywords.append(df.index[self.g.vp['kind'].a[n_docs:] == ik])
+		name = self.g.vp["name"] = self.g.new_vp("string")
+		kind = self.g.vp["kind"] = self.g.new_vp("int")
+		weight = self.g.ep["count"] = self.g.new_ep("int")
+		kind.a[:D] = 0
+
+		for i, doc in enumerate(documents):
+			name[self.g.vertex(i)] = str(doc)
+
+		self.words = pd.Index(adatas[0].var_names.copy())
+		self.keywords = []
+		for i, (adata, offset) in enumerate(zip(adatas, offsets)):
+			prefix = "#" * i
+			feature_names = pd.Index([prefix + str(v) for v in adata.var_names]) if i else self.words
+			kind.a[offset:offset + adata.n_vars] = i + 1
+			for j, feature in enumerate(feature_names):
+				name[self.g.vertex(int(offset + j))] = str(feature)
+			if i:
+				self.keywords.append(feature_names)
+
+		total_edges = 0
+		for adata, offset in zip(adatas, offsets):
+			X = adata.X.to_memory() if hasattr(adata.X, "to_memory") else adata.X
+			if sparse.issparse(X):
+				X = X.tocsr(copy=False)
+				if not X.has_canonical_format:
+					X = X.copy()
+					X.sum_duplicates()
+				coo = X.tocoo(copy=False)
+				rows, cols, vals = coo.row, coo.col, coo.data.astype(np.int64, copy=False)
+			else:
+				X = np.asarray(X)
+				rows, cols = np.nonzero(X)
+				vals = X[rows, cols].astype(np.int64, copy=False)
+
+			if adata.obs_names.equals(documents):
+				sources = rows.astype(np.int64, copy=False)
+			else:
+				row_map = documents.get_indexer(adata.obs_names)
+				sources = row_map[rows]
+
+			keep = (sources >= 0) & (vals > 0)
+			n = int(np.count_nonzero(keep))
+			if not n:
+				continue
+
+			edges = np.empty((n, 3), dtype=np.int64)
+			edges[:, 0] = sources[keep]
+			edges[:, 1] = int(offset) + cols[keep]
+			edges[:, 2] = vals[keep]
+			self.g.add_edge_list(edges, eprops=[weight])
+			total_edges += n
+
+		if total_edges == 0:
+			raise ValueError("Empty graph")
+
+		self.documents = documents
+		if self.save_graph_path is not None:
+			folder = os.path.dirname(self.save_graph_path)
+			if folder:
+				Path(folder).mkdir(parents=True, exist_ok=True)
+			self.save_graph(filename=self.save_graph_path)
 
 
 	def fit(self, n_init=1, verbose=True, deg_corr=True, overlap=False, parallel=False, B_min=0, B_max=None, clabel=None, *args, **kwargs) -> None:
