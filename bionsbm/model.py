@@ -1,5 +1,5 @@
 """
-bionSBM 19/08/2026 -- new make_graph, get_groups, save_levels
+bionSBM 19/08/2026
 
 Copyright(C) 2021 fvalle1 & gmalagol10
 
