@@ -1,15 +1,37 @@
 #!/bin/bash
+set -euo pipefail
 
-#Update the path and the env
-CONDA_ENV=topmod
-ACTIVATE=/store24/project24/ladcol_012/miniconda3/bin/activate
-source ${ACTIVATE} ${CONDA_ENV}
+CONDA_SH=/store24/project24/ladcol_012/miniconda3/etc/profile.d/conda.sh
+SCRIPT_DIR=/store24/project24/ladcol_012/bionSBM_revision
 
-echo $1
-echo $2
-echo $3
-echo $4
-#Update the path
-python /store24/project24/ladcol_012/bionSBM/${1}.py $2 $3 $4 $5 $6
+tool=$1
+shift
 
-echo "Script ${exp}.py completed"
+
+case "$tool" in
+    Mowgli_Resources|Mowgli|Mowgli_LatentDim)
+        CONDA_ENV=mowgli
+        script="$SCRIPT_DIR/${tool}.py"
+        ;;
+    *)
+        CONDA_ENV=tm
+        script="$SCRIPT_DIR/${tool}.py"
+        ;;
+esac
+
+set +u
+source "$CONDA_SH"
+conda activate "$CONDA_ENV"
+set -u
+
+export MPLBACKEND=Agg
+
+
+echo "Environment: $CONDA_ENV"
+echo "Python: $(command -v python)"
+echo "Script: $script"
+echo "Arguments: $*"
+
+python "$script" "$@"
+
+echo "Script $script completed successfully"

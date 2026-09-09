@@ -13,6 +13,9 @@ from sklearn.model_selection import train_test_split
 import muon as mu
 import scipy.sparse as sp
 import anndata as ad
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import nmi
 
 colors_to_use=[(0.34550725069638827, 0.4203708006658883, 0.9696902293486781),
  (0.9893800026041992, 0.378955911742755, 0.21756841368122667),
@@ -200,57 +203,80 @@ def find_best_level(results, ground_truth, label="CellType", method="best", metr
 					ok_levels[exp][run]=np.argmax(pd.DataFrame.from_dict(exps[exp], orient="index").fillna(0))			
 	return ok_levels
 
-def create_results(dataset, label, metric="NMI/NMI*"):
-	
-	SBMs=pd.read_csv(f"Datasets/{dataset}/bionSBM/{dataset}_NMI.tsv.gz", sep="\t", index_col=0)
-	SBMs["NMI/NMI*"]=SBMs["NMI"]/SBMs["NMI*"]
-	SBMs=SBMs[SBMs["GT"]==label]
-	SBMs["Algorithm"]="bionSBM"
-	SBMs["Data"]=[create_data(SBMs.iloc[i]["Exp"]) for i in range(len(SBMs))]
-	gt=pd.read_csv(f"Datasets/{dataset}/{dataset}_Metadata.tsv.gz", sep="\t", index_col=0)
-	ok_levels_best=find_best_level(SBMs, gt, label=label, method="best", metric=metric)
-	ok_levels_nc=find_best_level(SBMs, gt, label=label, method="CT_clusters", metric=metric)
+def _read_metrics(path):
+	"""Read a metrics table saved either with or without a pandas index."""
+	if not os.path.isfile(path):
+		print(f"Metrics file not found: {path}", flush=True)
+		return pd.DataFrame()
+	df = pd.read_csv(path, sep="\t")
+	return df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed:")]
 
 
-	SBMs_def_best=pd.DataFrame()
-	for exp in ok_levels_best.keys():
-		for run in ok_levels_best[exp].keys():
-			d=SBMs[(SBMs["Exp"]==exp) & (SBMs["Run"]==run) & (SBMs["Level"]==int(ok_levels_best[exp][run]))]
-			SBMs_def_best=pd.concat([SBMs_def_best, d])
+def _load_method_results(dataset, folder, label, algorithm, clustering=None):
+	path = f"Datasets/{dataset}/{folder}/{dataset}_NMI.tsv.gz"
+	df = _read_metrics(path)
+	if df.empty:
+		return df
 
-	SBMs_def_ct=pd.DataFrame()
-	for exp in ok_levels_nc.keys():
-		for run in ok_levels_nc[exp].keys():
-			d=SBMs[(SBMs["Exp"]==exp) & (SBMs["Run"]==run) & (SBMs["Level"]==int(ok_levels_nc[exp][run]))]
-			SBMs_def_ct=pd.concat([SBMs_def_ct, d])
-	
-   
-	mowgli=pd.read_csv(f"Datasets/{dataset}/Mowgli/{dataset}_NMI_Silhouette.tsv.gz", sep="\t", index_col=0)
-	mowgli["NMI/NMI*"]=mowgli["NMI"]/mowgli["NMI*"]
+	missing = {"Exp", "GT", "NMI", "NMI*"} - set(df.columns)
+	if missing:
+		raise ValueError(f"Missing columns in {path}: {sorted(missing)}")
+	if clustering is not None:
+		if "Clustering" not in df.columns:
+			raise ValueError(f"Missing Clustering column in {path}")
+		df = df[df["Clustering"].astype(str).str.lower() == clustering.lower()]
 
-	mowgli=mowgli[mowgli["GT"]==label]
-	mowgli["Algorithm"]="Mowgli"
-	mowgli["Data"]=["_".join(mowgli.iloc[i]["Exp"].split("_")[1:]) for i in range(len(mowgli))]	
+	df = df[df["GT"] == label].copy()
+	df["NMI/NMI*"] = df["NMI"] / df["NMI*"].replace(0, np.nan)
+	df["Algorithm"] = algorithm
+	df["Data"] = df["Exp"].astype(str).str.split("_", n=1).str[-1]
+	return df
 
-	if dataset not in ["BMMCCite", "Spleen"]:
-		ShareTopic=pd.read_csv(f"Datasets/{dataset}/ShareTopic/{dataset}_NMI_Silhouette.tsv.gz", sep="\t", index_col=0)
-		ShareTopic["NMI/NMI*"]=ShareTopic["NMI"]/ShareTopic["NMI*"]
-		ShareTopic=ShareTopic[ShareTopic["GT"]==label]
-		ShareTopic["Algorithm"]="ShareTopic"
-		ShareTopic["Data"]=["_".join(ShareTopic.iloc[i]["Exp"].split("_")[1:]) for i in range(len(ShareTopic))]
+
+def create_results(dataset, label, metric="NMI/NMI*", embedding_clustering="KMeans"):
+	# bionSBM has multiple hierarchy levels and therefore needs level selection.
+	path = f"Datasets/{dataset}/bionSBM/{dataset}_NMI.tsv.gz"
+	SBMs = _read_metrics(path)
+	SBMs["NMI/NMI*"] = SBMs["NMI"] / SBMs["NMI*"].replace(0, np.nan)
+	SBMs = SBMs[SBMs["GT"] == label].copy()
+	SBMs["Algorithm"] = "bionSBM"
+	SBMs["Data"] = SBMs["Exp"].astype(str).str.split("_", n=1).str[-1]
+
+	gt = pd.read_csv(
+		f"Datasets/{dataset}/{dataset}_Metadata.tsv.gz", sep="\t", index_col=0
+	)
+	best = find_best_level(SBMs, gt, label=label, method="best", metric=metric)
+	closest = find_best_level(SBMs, gt, label=label, method="CT_clusters", metric=metric)
+
+	def select_levels(levels):
+		rows = [
+			SBMs[(SBMs["Exp"] == exp) & (SBMs["Run"] == run) &
+			     (SBMs["Level"] == int(level))]
+			for exp, runs in levels.items() for run, level in runs.items()
+		]
+		return pd.concat(rows, ignore_index=True) if rows else SBMs.iloc[0:0].copy()
+
+	# Topic models have a native clustering; embedding methods are evaluated by K-means.
+	methods = [
+		_load_method_results(dataset, "Mowgli", label, "Mowgli"),
+		_load_method_results(dataset, "MOFA", label, "MOFA+", embedding_clustering),
+		_load_method_results(dataset, "COBOLT", label, "COBOLT"),
+	]
+	if dataset in ["BMMCCite", "Spleen"]:
+		methods.append(_load_method_results(
+			dataset, "TotalVI", label, "totalVI", embedding_clustering
+		))
 	else:
-		ShareTopic=pd.DataFrame()
-	
-	df_best=pd.concat([SBMs_def_best, ShareTopic, mowgli], axis=0)
-	df_best.reset_index(inplace=True)
-	df_best.drop("index", axis=1, inplace=True)
-	df_best["Data"]=df_best["Data"].replace("_", "+")
+		methods += [
+			_load_method_results(dataset, "ShareTopic", label, "ShareTopic"),
+			_load_method_results(dataset, "MultiVI", label, "MultiVI", embedding_clustering),
+		]
 
-	df_ct=pd.concat([SBMs_def_ct, ShareTopic, mowgli], axis=0)
-	df_ct.reset_index(inplace=True)
-	df_ct.drop("index", axis=1, inplace=True)
-	df_ct["Data"]=df_ct["Data"].replace("_", "+")
-
+	other = pd.concat([x for x in methods if not x.empty], ignore_index=True, sort=False)
+	df_best = pd.concat([select_levels(best), other], ignore_index=True, sort=False)
+	df_ct = pd.concat([select_levels(closest), other], ignore_index=True, sort=False)
+	for df in (df_best, df_ct):
+		df["Data"] = df["Data"].astype(str).str.replace("_", "+", regex=False)
 	return df_best, df_ct
 
 def create_results_topics(dataset, exps=None):
@@ -368,6 +394,92 @@ def run_with_peak_increase(fn, *args, poll_s: float = 0.01, include_children: bo
 
 
 
+def _fresh_process_peak_worker(conn, fn, args, kwargs, poll_s, include_children, discard_result):
+    """Run one measurement inside a newly spawned Python process."""
+    import traceback
+
+    try:
+        result, elapsed, peak_increase = run_with_peak_increase(
+            fn,
+            *args,
+            poll_s=poll_s,
+            include_children=include_children,
+            discard_result=discard_result,
+            **kwargs,
+        )
+        conn.send(("ok", result, elapsed, peak_increase))
+    except BaseException:
+        conn.send(("error", traceback.format_exc()))
+    finally:
+        conn.close()
+
+
+def run_with_peak_increase_fresh_process(
+    fn,
+    *args,
+    poll_s: float = 0.01,
+    include_children: bool = True,
+    discard_result: bool = False,
+    **kwargs,
+):
+    """
+    Measure incremental RAM in a fresh spawned Python process.
+
+    The child receives/unpickles the input first. Its RSS baseline is then sampled
+    immediately before ``fn`` starts, so imports and the input object are excluded
+    from the reported peak increase. A new child is used for every call, preventing
+    allocator state from previous benchmark sizes from affecting the measurement.
+
+    Returns
+    -------
+    (result_or_None, time_sec, peak_increase_bytes)
+    """
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    recv_conn, send_conn = ctx.Pipe(duplex=False)
+
+    process = ctx.Process(
+        target=_fresh_process_peak_worker,
+        args=(
+            send_conn,
+            fn,
+            args,
+            kwargs,
+            poll_s,
+            include_children,
+            discard_result,
+        ),
+    )
+    process.start()
+    send_conn.close()
+
+    try:
+        message = recv_conn.recv()
+    except EOFError as exc:
+        process.join()
+        raise RuntimeError(
+            f"Fresh benchmark process exited with code {process.exitcode} "
+            "before returning a measurement"
+        ) from exc
+    finally:
+        recv_conn.close()
+
+    process.join()
+
+    if message[0] == "error":
+        raise RuntimeError("Fresh benchmark process failed:\n" + message[1])
+
+    if process.exitcode != 0:
+        raise RuntimeError(
+            f"Fresh benchmark process exited with code {process.exitcode}"
+        )
+
+    _, result, elapsed, peak_increase = message
+    return result, elapsed, peak_increase
+
+
+
 def muon_subsample(mdata, subsample_dict, strata_column, random_state=42):
 	"""
 	Build a new MuData object from scratch to avoid indexing issues
@@ -469,3 +581,376 @@ def muon_subsample(mdata, subsample_dict, strata_column, random_state=42):
 
 	return mdata_subsampled
 
+
+# ============================================================================
+# FEATURE-MATCHED REGULATORY NULL MODELS
+# ============================================================================
+# Shared by run_TF_enrichment_corrected_v2.py and
+# run_TF_ATAC_GEX_corrected_v2.py. Random mRNA topics preserve the observed
+# joint distribution of mean expression, cell coverage, and genomic gene length.
+
+import gzip
+import re
+
+# Dataset-specific gene annotations. Paths are relative to the directory from
+# which the analysis scripts are launched.
+GTF_PATHS = {
+    "BMMCCite": "../AnnotRef/hs/hg38/gencode.v44.annotation.gtf.gz",
+    "BMMCMultiOme": "../AnnotRef/hs/hg38/gencode.v44.annotation.gtf.gz",
+    "HSPC": "../AnnotRef/hs/hg38/gencode.v44.annotation.gtf.gz",
+    "MouseSkin": "../AnnotRef/mm/gencode.vM33.annotation.gtf.gz",
+    "PBMC": "../AnnotRef/hs/T2T/GCF_009914755.1_T2T-CHM13v2.0_genomic.gtf.gz",
+    "Spleen": "../AnnotRef/mm/gencode.vM33.annotation.gtf.gz",
+}
+
+MOUSE_DATASETS = {"MouseSkin", "Spleen"}
+MATCHING_COVARIATES = ("mean_expression", "coverage", "gene_length")
+
+
+def strip_gene_version(name):
+    """Remove a terminal Ensembl version: ENSG...12.4 -> ENSG...12."""
+    return re.sub(r"\.\d+$", "", str(name))
+
+
+def regulatory_matrix_path(dataset):
+    """Return the fixed MuData file used to compute expression and coverage."""
+    main_fs = "Peak" if dataset not in {"BMMCCite", "Spleen"} else "ADT"
+    return f"Datasets/{dataset}/CM/{dataset}_{main_fs}_mRNA_lncRNA_Def.h5mu"
+
+
+def _get_mrna_modality(mdata):
+    """Return the mRNA/GEX modality without assuming exact capitalization."""
+    keys = list(mdata.mod.keys())
+    exact = {"mrna", "gex", "gene_expression", "gene expression", "rna"}
+    for key in keys:
+        if key.lower() in exact:
+            return mdata.mod[key]
+    for key in keys:
+        if "mrna" in key.lower() or "gex" in key.lower():
+            return mdata.mod[key]
+    raise KeyError(f"Cannot identify mRNA modality; available modalities: {keys}")
+
+
+def read_expression_lookup(dataset):
+    """Map gene aliases to mean expression and cell coverage from ``adata.X``.
+
+    Coverage is the fraction of cells with a strictly positive value. Sparse
+    matrices are processed without conversion to a dense matrix.
+    """
+    path = regulatory_matrix_path(dataset)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+
+    adata = _get_mrna_modality(mu.read_h5mu(path))
+    X = adata.X.copy() if sp.issparse(adata.X) else np.asarray(adata.X)
+    if sp.issparse(X):
+        X.eliminate_zeros()
+        means = np.asarray(X.mean(axis=0)).ravel()
+        coverage = np.asarray(X.getnnz(axis=0)).ravel() / adata.n_obs
+    else:
+        means = X.mean(axis=0)
+        coverage = (X > 0).mean(axis=0)
+
+    alias_columns = [c for c in (
+        "gene_id", "gene_ids", "gene_name", "gene_names",
+        "gene_symbol", "gene_symbols", "symbol"
+    ) if c in adata.var.columns]
+
+    lookup = {}
+    for i, var_name in enumerate(adata.var_names.astype(str)):
+        aliases = [var_name] + [adata.var.iloc[i][c] for c in alias_columns]
+        for alias in aliases:
+            if pd.isna(alias):
+                continue
+            for key in {str(alias), strip_gene_version(alias)}:
+                lookup.setdefault(key, (float(means[i]), float(coverage[i])))
+    return lookup
+
+
+def _parse_gtf_attributes(text):
+    """Parse quoted GTF attributes, with a small ``key=value`` fallback."""
+    attrs = dict(re.findall(r'(\S+)\s+"([^"]*)"', text))
+    if not attrs:
+        attrs = dict(part.split("=", 1) for part in text.split(";") if "=" in part)
+    return attrs
+
+
+def read_gtf_lookup(path):
+    """Map ``gene_id`` and ``gene_name`` aliases to genomic gene length.
+
+    Only records whose third GTF column is ``gene`` are used. Length is the
+    inclusive genomic span ``end - start + 1``. Both plain and gzipped GTFs are
+    supported, including GENCODE and NCBI/T2T attribute layouts.
+    """
+    if not path or not os.path.isfile(path):
+        raise FileNotFoundError(f"Invalid GTF path: {path}")
+
+    lookup = {}
+    opener = gzip.open if path.endswith(".gz") else open
+    with opener(path, "rt") as handle:
+        for line in handle:
+            if line.startswith("#"):
+                continue
+            fields = line.rstrip().split("\t")
+            if len(fields) < 9 or fields[2] != "gene":
+                continue
+            attrs = _parse_gtf_attributes(fields[8])
+            gene_id, gene_name = attrs.get("gene_id"), attrs.get("gene_name")
+            if not gene_id:
+                continue
+            length = int(fields[4]) - int(fields[3]) + 1
+            record = (str(gene_id), str(gene_name) if gene_name else None, length)
+            for alias in (gene_id, strip_gene_version(gene_id), gene_name):
+                if alias:
+                    lookup.setdefault(str(alias), record)
+    if not lookup:
+        raise ValueError(f"No gene records found in GTF: {path}")
+    return lookup
+
+
+def read_gene_lookups(dataset):
+    """Load expression/coverage and GTF-length lookup tables once."""
+    if dataset not in GTF_PATHS:
+        raise KeyError(f"No GTF configured for dataset: {dataset}")
+    return read_expression_lookup(dataset), read_gtf_lookup(GTF_PATHS[dataset])
+
+
+def gene_covariates(features, expression_lookup, gtf_lookup):
+    """Resolve topic genes and return their three matching covariates.
+
+    Topic features are searched as provided, without Ensembl versions, and via
+    both ``gene_id`` and ``gene_name`` aliases from the GTF. Genes missing any
+    covariate are excluded because they cannot be feature-matched.
+    """
+    rows = []
+    for feature in map(str, features):
+        keys = [feature, strip_gene_version(feature)]
+        record = next((gtf_lookup[k] for k in keys if k in gtf_lookup), None)
+        if record:
+            gene_id, gene_name, length = record
+            keys += [gene_id, strip_gene_version(gene_id), gene_name]
+        else:
+            length = np.nan
+        expression, coverage = next(
+            (expression_lookup[k] for k in keys if k and k in expression_lookup),
+            (np.nan, np.nan),
+        )
+        rows.append((feature, expression, coverage, length))
+
+    stats = pd.DataFrame(
+        rows, columns=("gene",) + MATCHING_COVARIATES
+    ).set_index("gene")
+    return stats.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=MATCHING_COVARIATES
+    )
+
+
+def add_matching_strata(stats, n_bins=5):
+    """Assign joint quantile bins for expression, coverage, and gene length."""
+    stats = stats.copy()
+    labels = []
+    for covariate in MATCHING_COVARIATES:
+        values = stats[covariate]
+        if values.nunique() <= 1:
+            binned = pd.Series(0, index=values.index, dtype=int)
+        else:
+            binned = pd.qcut(
+                values, min(n_bins, values.nunique()), labels=False,
+                duplicates="drop",
+            ).astype(int)
+        labels.append(binned.rename(covariate))
+    stats["matching_stratum"] = (
+        pd.concat(labels, axis=1).astype(str).agg("|".join, axis=1)
+    )
+    return stats
+
+
+def iter_matched_null_topics(topic_genes, stats, n_perm, rng):
+    """Yield same-size random topics with identical joint stratum counts.
+
+    Observed topic genes are excluded from a stratum when enough alternative
+    genes exist. In rare small strata, the complete stratum is used to preserve
+    exact topic size and matching distributions.
+    """
+    topic = set(map(str, topic_genes)) & set(stats.index)
+    if not topic:
+        return
+
+    counts = stats.loc[list(topic), "matching_stratum"].value_counts()
+    pools = {}
+    for stratum, size in counts.items():
+        mask = (stats["matching_stratum"] == stratum) & ~stats.index.isin(topic)
+        pool = stats.index[mask].to_numpy()
+        if len(pool) < size:
+            pool = stats.index[stats["matching_stratum"] == stratum].to_numpy()
+        pools[stratum] = pool
+
+    for _ in range(n_perm):
+        random_topic = set()
+        for stratum, size in counts.items():
+            random_topic.update(
+                map(str, rng.choice(pools[stratum], int(size), replace=False))
+            )
+        yield random_topic
+
+
+def find_best_topic_level(base_dir, n_celltypes):
+    """Find the hierarchy level with cluster count closest to cell-type count.
+
+    This name is intentionally distinct from the pre-existing ``find_best_level``
+    utility above, whose API is used by the benchmarking code.
+    """
+    best_level, best_delta = None, np.inf
+    for name in os.listdir(base_dir):
+        if not name.endswith("_clusters.tsv.gz") or "_level_" not in name:
+            continue
+        try:
+            clusters = pd.read_csv(
+                os.path.join(base_dir, name), sep="\t", index_col=0
+            )
+        except Exception:
+            continue
+        n_clusters = np.unique(np.argmax(clusters.values, axis=0)).size
+        delta = abs(n_clusters - n_celltypes)
+        if delta < best_delta:
+            best_level = name.split("_level_")[1].split("_")[0]
+            best_delta = delta
+    return best_level
+
+
+def load_topic_gene_sets(path):
+    """Load an mRNA topic matrix and return its nonzero gene sets."""
+    topics = pd.read_csv(path, sep="\t", index_col=0)
+    topics.index = topics.index.astype(str).str.replace("#", "", regex=False)
+    topics.replace(0, np.nan, inplace=True)
+    gene_sets = {topic: set(topics[topic].dropna().index) for topic in topics.columns}
+    return topics, gene_sets
+
+
+def load_regulons(dataset):
+    """Load CollecTRI and return TF-to-target-gene sets."""
+    path = "collectri_mm.tsv" if dataset in MOUSE_DATASETS else "collectri.tsv"
+    network = pd.read_csv(path, sep="\t")
+    return network.groupby("source")["target"].apply(set).to_dict()
+
+
+def bh_fdr(pvalues):
+    """Return Benjamini-Hochberg adjusted P-values."""
+    pvalues = np.asarray(pvalues, dtype=float)
+    if not len(pvalues):
+        return pvalues
+    order = np.argsort(pvalues)
+    adjusted = pvalues[order] * len(pvalues) / np.arange(1, len(pvalues) + 1)
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    output = np.empty_like(adjusted)
+    output[order] = np.clip(adjusted, 0, 1)
+    return output
+  
+
+
+def read_celltype(count_matrix):
+	mdata = mu.read_h5mu(count_matrix)
+
+	if "CellType" in mdata.obs.columns:
+		return mdata.obs["CellType"].copy()
+
+	for mod in mdata.mod:
+		if "CellType" in mdata[mod].obs.columns:
+			return mdata[mod].obs["CellType"].copy()
+
+	raise KeyError(f"No CellType column found in {count_matrix}")
+
+
+def align_labels(metadata, clusters):
+	metadata = metadata.dropna()
+	clusters = clusters.dropna()
+
+	cells = metadata.index.intersection(clusters.index, sort=False)
+	return metadata.loc[cells].astype(str), clusters.loc[cells].astype(str)
+
+
+def factor_labels(file_data, absolute=False):
+	"""
+	Read a dimensions x cells matrix and assign each cell to its
+	largest latent factor.
+	"""
+	embedding = pd.read_csv(file_data, index_col=0, sep="\t")
+
+	if absolute:
+		embedding = embedding.abs()
+
+	return pd.Series(
+		np.argmax(embedding.to_numpy(), axis=0),
+		index=embedding.columns,
+		name="cluster",
+	)
+
+
+def kmeans_labels(file_data, metadata, run):
+	"""
+	Read a dimensions x cells embedding and cluster cells using
+	K-means with k equal to the number of ground-truth cell types.
+	"""
+	embedding = pd.read_csv(file_data, index_col=0, sep="\t").T
+	embedding = embedding.loc[~embedding.index.duplicated()]
+	embedding = embedding.replace([np.inf, -np.inf], np.nan).dropna()
+
+	cells = embedding.index.intersection(metadata.dropna().index, sort=False)
+	embedding = embedding.loc[cells]
+	y_true = metadata.loc[cells]
+
+	n_clusters = y_true.nunique()
+	if n_clusters < 2 or n_clusters >= len(embedding):
+		return pd.Series(dtype=str, name="cluster")
+
+	x = StandardScaler().fit_transform(embedding)
+
+	clusters = KMeans(
+		n_clusters=n_clusters,
+		n_init=20,
+		random_state=run,
+	).fit_predict(x)
+
+	return pd.Series(
+		clusters,
+		index=embedding.index,
+		name="cluster",
+	)
+
+
+def topic_labels(file_data):
+	"""
+	Read a one-column MaxTopic file.
+	"""
+	data = pd.read_csv(file_data, index_col=0, sep="\t")
+
+	if data.shape[1] != 1:
+		raise ValueError(
+			f"Expected one cluster column in {file_data}, "
+			f"found {data.shape[1]}"
+		)
+
+	return data.iloc[:, 0].rename("cluster")
+
+
+def compute_nmi(metadata, clusters, seed, n_shuffles=100):
+	y_true, y_pred = align_labels(metadata, clusters)
+
+	if len(y_true) == 0 or y_pred.nunique() < 2:
+		return np.nan, np.nan, 0
+
+	observed = nmi.compute_normalised_mutual_information(
+		y_true,
+		y_pred,
+	)
+
+	rng = np.random.default_rng(seed)
+	random_nmi = np.mean([
+		nmi.compute_normalised_mutual_information(
+			y_true,
+			rng.permutation(y_pred.to_numpy()),
+		)
+		for _ in range(n_shuffles)
+	])
+
+	return observed, random_nmi, y_pred.nunique()
