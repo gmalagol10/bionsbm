@@ -4,7 +4,7 @@ Integration of single-cell multi-omic data with graph-based topic modelling
 
 Gabriele Malagoli, Filippo Valle, Andreina Tirabassi, Annalisa Marsico, Loredana Martignetti, Michele Caselle & Maria Colomé-Tatché (Briefings in Bioinformatics, 2026)
 
-doi.org/10.1093/bib/bbag608
+https://doi.org/10.1093/bib/bbag608
 
 ![alt text](https://github.com/gmalagol10/bionsbm/blob/main/bionsbm/bionSBM_Fig1.png?raw=true)
 
